@@ -1,28 +1,65 @@
 import {html, render} from 'lit-html';
 import './style.css';
 import '@fortawesome/fontawesome-free/css/all.min.css';
+import {createSimulationConfig, createSimulationState} from './sim/constants';
+import {generatePlanet, simulationStep} from './sim/engine';
 
 type MapLayer = 'biomes' | 'temp' | 'moisture' | 'daisies';
 
-const config = {
-  year: 0,
+const uiState = {
   isRunning: false,
   speed: 1,
   activeLayer: 'biomes' as MapLayer,
   activeTool: 'inspect',
-  solarLuminosity: 1.0, // Multiplier
-  co2Ppm: 350, // Greenhouse driver
-  o2Pct: 21, // Oxygen percentage
-  seaLevelOffset: 0, // Height modifier
-  avgPlanetTemp: 15.0,
-  oceanCoveragePct: 70,
-  totalBiomassPct: 35,
 };
+const SIMULATION_TICK_INTERVAL_MS = 1_000;
+
+const simulation = (() => {
+  const state = createSimulationState();
+  const config = createSimulationConfig();
+  let timer: number | undefined;
+  let metrics = generatePlanet(state, config, 'earth');
+
+  function stop() {
+    if (timer === undefined) return;
+    window.clearInterval(timer);
+    timer = undefined;
+  }
+
+  function start() {
+    stop();
+    timer = window.setInterval(() => {
+      simulation.step();
+      renderApp();
+    }, SIMULATION_TICK_INTERVAL_MS / uiState.speed);
+  }
+
+  function toggle() {
+    uiState.isRunning = !uiState.isRunning;
+    if (uiState.isRunning) {
+      start();
+    } else {
+      stop();
+    }
+  }
+  return {
+    toggle,
+    config,
+    get metrics() {
+      return metrics;
+    },
+    step: () => (metrics = simulationStep(state, config)),
+    setSpeed(speed: number) {
+      uiState.speed = speed;
+      if (uiState.isRunning) start();
+    },
+  };
+})();
 
 function speedButtonHtml(speed: number) {
-  const isSelected = config.speed === speed;
+  const isSelected = uiState.speed === speed;
   return html`<button
-    @click=${() => (config.speed = speed)}
+    @click=${() => simulation.setSpeed(speed)}
     aria-pressed=${isSelected}
     class="btn-speed px-2.5 py-1 ${isSelected ? 'bg-blue-600 text-white font-bold' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'} rounded text-xs font-mono"
   >
@@ -60,14 +97,16 @@ function statusBarHtml() {
         <span class="text-slate-500">
           <i class="fa-solid fa-clock"></i> Year:
         </span>
-        <span class="font-bold text-amber-400 font-mono"> ${config.year} </span>
+        <span class="font-bold text-amber-400 font-mono">
+          ${simulation.config.year}
+        </span>
       </div>
       <div class="flex items-center space-x-2">
         <span class="text-slate-500">
           <i class="fa-solid fa-temperature-high"></i> Avg Temp:
         </span>
         <span class="font-bold text-emerald-400 font-mono">
-          ${config.avgPlanetTemp}°C
+          ${simulation.metrics.averageTemperatureC.toFixed(1)}°C
         </span>
       </div>
       <div class="flex items-center space-x-2">
@@ -75,7 +114,7 @@ function statusBarHtml() {
           <i class="fa-solid fa-droplet"></i> Ocean Cover:
         </span>
         <span class="font-bold text-blue-400 font-mono">
-          ${config.oceanCoveragePct}%
+          ${simulation.metrics.oceanCoveragePct}%
         </span>
       </div>
       <div class="flex items-center space-x-2">
@@ -83,7 +122,7 @@ function statusBarHtml() {
           <i class="fa-solid fa-seedling"></i> Biomass:
         </span>
         <span class="font-bold text-green-400 font-mono">
-          ${config.totalBiomassPct}%
+          ${simulation.metrics.totalBiomassPct}%
         </span>
       </div>
     </div>
@@ -91,13 +130,15 @@ function statusBarHtml() {
     <!-- Simulation Speed / Play / Pause Controls -->
     <div class="flex items-center space-x-2">
       <button
-        @click=${() => (config.isRunning = !config.isRunning)}
-        class="px-3 py-1.5 ${config.isRunning ? 'bg-emerald-600' : 'bg-amber-600'} hover:bg-emerald-500 text-white rounded font-bold text-xs flex items-center gap-1.5 transition"
+        @click=${simulation.toggle}
+        aria-pressed=${uiState.isRunning}
+        class="px-3 py-1.5 ${uiState.isRunning ? 'bg-emerald-600' : 'bg-amber-600'} hover:bg-emerald-500 text-white rounded font-bold text-xs flex items-center gap-1.5 transition"
       >
         <i class="fa-solid fa-play"></i>
-        <span> ${config.isRunning ? 'PAUSE' : 'RUN'} </span>
+        <span> ${uiState.isRunning ? 'PAUSE' : 'RUN'} </span>
       </button>
       <button
+        @click=${simulation.step}
         class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-xs transition"
       >
         <i class="fa-solid fa-forward-step"></i>
@@ -109,9 +150,9 @@ function statusBarHtml() {
 }
 
 function layerButtonHtml(layer: MapLayer, label: string, icon: string) {
-  const isSelected = config.activeLayer === layer;
+  const isSelected = uiState.activeLayer === layer;
   return html`<button
-    @click=${() => (config.activeLayer = layer)}
+    @click=${() => (uiState.activeLayer = layer)}
     aria-pressed=${isSelected}
     class="px-2.5 py-2 rounded ${isSelected ? 'bg-blue-600 text-white' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'} text-left font-medium flex items-center justify-between"
   >
@@ -137,26 +178,26 @@ function layerSwitchHtml() {
 
 function atmosphericSlidersHtml() {
   function resetAtmosphere() {
-    config.solarLuminosity = 1;
-    config.co2Ppm = 350;
-    config.o2Pct = 21;
-    config.seaLevelOffset = 0;
+    simulation.config.solarLuminosity = 1;
+    simulation.config.co2Ppm = 350;
+    simulation.config.o2Pct = 21;
+    simulation.config.seaLevelOffset = 0;
   }
 
   function solarLuminosityInput(this: HTMLInputElement) {
-    config.solarLuminosity = Number(this.value);
+    simulation.config.solarLuminosity = Number(this.value);
   }
 
   function co2Input(this: HTMLInputElement) {
-    config.co2Ppm = Number(this.value);
+    simulation.config.co2Ppm = Number(this.value);
   }
 
   function oxygenInput(this: HTMLInputElement) {
-    config.o2Pct = Number(this.value);
+    simulation.config.o2Pct = Number(this.value);
   }
 
   function seaLevelInput(this: HTMLInputElement) {
-    config.seaLevelOffset = Number(this.value);
+    simulation.config.seaLevelOffset = Number(this.value);
   }
 
   return html`
@@ -181,7 +222,7 @@ function atmosphericSlidersHtml() {
         <div class="flex justify-between text-xs mb-1">
           <span class="text-slate-400">Solar Luminosity</span>
           <span class="font-mono text-amber-400 font-bold">
-            ${config.solarLuminosity.toFixed(2)}x
+            ${simulation.config.solarLuminosity.toFixed(2)}x
           </span>
         </div>
         <input
@@ -189,7 +230,7 @@ function atmosphericSlidersHtml() {
           min="0.6"
           max="1.4"
           step="0.01"
-          .value=${String(config.solarLuminosity)}
+          .value=${String(simulation.config.solarLuminosity)}
           @input=${solarLuminosityInput}
           class="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer"
         />
@@ -204,7 +245,7 @@ function atmosphericSlidersHtml() {
         <div class="flex justify-between text-xs mb-1">
           <span class="text-slate-400">Carbon Dioxide (CO2)</span>
           <span class="font-mono text-emerald-400 font-bold">
-            ${config.co2Ppm} ppm
+            ${simulation.config.co2Ppm} ppm
           </span>
         </div>
         <input
@@ -212,7 +253,7 @@ function atmosphericSlidersHtml() {
           min="50"
           max="2500"
           step="10"
-          .value=${String(config.co2Ppm)}
+          .value=${String(simulation.config.co2Ppm)}
           @input=${co2Input}
           class="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer"
         />
@@ -223,7 +264,7 @@ function atmosphericSlidersHtml() {
         <div class="flex justify-between text-xs mb-1">
           <span class="text-slate-400">Oxygen Level (O2)</span>
           <span class="font-mono text-blue-400 font-bold">
-            ${config.o2Pct}%
+            ${simulation.config.o2Pct}%
           </span>
         </div>
         <input
@@ -231,7 +272,7 @@ function atmosphericSlidersHtml() {
           min="0"
           max="40"
           step="1"
-          .value=${String(config.o2Pct)}
+          .value=${String(simulation.config.o2Pct)}
           @input=${oxygenInput}
           class="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer"
         />
@@ -243,9 +284,9 @@ function atmosphericSlidersHtml() {
           <span class="text-slate-400">Global Sea Level</span>
           <span class="font-mono text-cyan-400 font-bold">
             ${
-              config.seaLevelOffset === 0
+              simulation.config.seaLevelOffset === 0
                 ? 'Baseline'
-                : `${config.seaLevelOffset > 0 ? '+' : ''}${config.seaLevelOffset}m`
+                : `${simulation.config.seaLevelOffset > 0 ? '+' : ''}${simulation.config.seaLevelOffset}m`
             }
           </span>
         </div>
@@ -254,7 +295,7 @@ function atmosphericSlidersHtml() {
           min="-30"
           max="30"
           step="1"
-          .value=${String(config.seaLevelOffset)}
+          .value=${String(simulation.config.seaLevelOffset)}
           @input=${seaLevelInput}
           class="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer"
         />
