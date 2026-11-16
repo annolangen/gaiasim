@@ -18,13 +18,16 @@
     "prepare": "npm run compile"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
     "@types/node": "^22.7.5",
     "gts": "^7.0.0",
+    "tailwindcss": "^4.3.5",
     "tsx": "^4.23.15",
     "typescript": "^6.0.3",
     "vite": "^8.3.8"
   },
   "dependencies": {
+    "chart.js": "^4.6.1",
     "lit-html": "^3.3.3"
   }
 }
