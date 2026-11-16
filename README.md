@@ -28,8 +28,8 @@ npm run presubmit
 ```
 
 This applies GTS's automatic formatting/lint fixes, then checks TypeScript,
-lint, and the production build. Review your diff afterward because `fix` may
-modify files.
+runs the simulation tests, lints, and builds the production app. Run just the
+tests with `npm test`. Review your diff afterward because `fix` may modify files.
 
 To check the production build locally, run:
 

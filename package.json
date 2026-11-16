@@ -13,14 +13,16 @@
     "clean": "gts clean",
     "compile": "tsc",
     "fix": "gts fix",
-    "presubmit": "npm run fix && npm run compile && npm run lint && npm run build",
+    "test": "tsx --test test/sim.test.ts",
+    "presubmit": "npm run fix && npm run compile && npm test && npm run lint && npm run build",
     "prepare": "npm run compile"
   },
   "devDependencies": {
+    "@types/node": "^22.7.5",
     "gts": "^7.0.0",
+    "tsx": "^4.23.15",
     "typescript": "^6.0.3",
-    "vite": "^8.3.8",
-    "@types/node": "^22.7.5"
+    "vite": "^8.3.8"
   },
   "dependencies": {
     "lit-html": "^3.3.3"
