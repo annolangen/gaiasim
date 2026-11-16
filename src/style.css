@@ -1,1 +1,5 @@
 @import "tailwindcss";
+
+.world-map-canvas {
+  image-rendering: pixelated;
+}

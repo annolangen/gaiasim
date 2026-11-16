@@ -1,5 +1,6 @@
-import {strictEqual} from 'node:assert';
+import {deepStrictEqual, strictEqual} from 'node:assert';
 import {test} from 'node:test';
+import {createMapPixels} from '../src/map-renderer';
 import {
   BIOMES,
   createSimulationConfig,
@@ -164,4 +165,37 @@ void test('createNoise2D is reproducible with a deterministic random source', ()
   const secondNoise = createNoise2D(() => 0.5);
 
   strictEqual(firstNoise(1.25, 3.75), secondNoise(1.25, 3.75));
+});
+
+void test('createMapPixels renders the selected layer as opaque RGBA pixels', () => {
+  const state = createSimulationState();
+  const config = createSimulationConfig();
+  state.elevation.fill(100);
+  state.biome.fill(BIOMES.FOREST.id);
+  state.temperature.fill(40);
+  state.moisture.fill(50);
+  state.daisyWhite.fill(0.1);
+
+  deepStrictEqual(
+    Array.from(createMapPixels(state, config, 'biomes').slice(0, 4)),
+    [...BIOMES.FOREST.color, 255],
+  );
+  deepStrictEqual(
+    Array.from(createMapPixels(state, config, 'temp').slice(0, 4)),
+    [255, 0, 0, 255],
+  );
+  deepStrictEqual(
+    Array.from(createMapPixels(state, config, 'moisture').slice(0, 4)),
+    [110, 150, 127, 255],
+  );
+  deepStrictEqual(
+    Array.from(createMapPixels(state, config, 'daisies').slice(0, 4)),
+    [240, 240, 255, 255],
+  );
+
+  state.moisture[0] = 150;
+  deepStrictEqual(
+    Array.from(createMapPixels(state, config, 'moisture').slice(0, 4)),
+    [0, 100, 255, 255],
+  );
 });

@@ -1,10 +1,16 @@
 import {html, render} from 'lit-html';
+import {createRef, ref} from 'lit-html/directives/ref.js';
 import './style.css';
 import '@fortawesome/fontawesome-free/css/all.min.css';
+import {drawMap, createMapPixels} from './map-renderer';
+import type {MapLayer} from './map-renderer';
 import {createSimulationConfig, createSimulationState} from './sim/constants';
-import {generatePlanet, simulationStep} from './sim/engine';
-
-type MapLayer = 'biomes' | 'temp' | 'moisture' | 'daisies';
+import {
+  calculateMetrics,
+  generatePlanet,
+  recalculateClimate,
+  simulationStep,
+} from './sim/engine';
 
 const uiState = {
   isRunning: false,
@@ -13,6 +19,7 @@ const uiState = {
   activeTool: 'inspect',
 };
 const SIMULATION_TICK_INTERVAL_MS = 1_000;
+const worldMapRef = createRef<HTMLCanvasElement>();
 
 const simulation = (() => {
   const state = createSimulationState();
@@ -48,7 +55,13 @@ const simulation = (() => {
     get metrics() {
       return metrics;
     },
+    mapPixels: (layer: MapLayer) => createMapPixels(state, config, layer),
     step: () => (metrics = simulationStep(state, config)),
+    setSeaLevelOffset(seaLevelOffset: number) {
+      config.seaLevelOffset = seaLevelOffset;
+      recalculateClimate(state, config);
+      metrics = calculateMetrics(state, config);
+    },
     setSpeed(speed: number) {
       uiState.speed = speed;
       if (uiState.isRunning) start();
@@ -181,7 +194,7 @@ function atmosphericSlidersHtml() {
     simulation.config.solarLuminosity = 1;
     simulation.config.co2Ppm = 350;
     simulation.config.o2Pct = 21;
-    simulation.config.seaLevelOffset = 0;
+    simulation.setSeaLevelOffset(0);
   }
 
   function solarLuminosityInput(this: HTMLInputElement) {
@@ -197,7 +210,7 @@ function atmosphericSlidersHtml() {
   }
 
   function seaLevelInput(this: HTMLInputElement) {
-    simulation.config.seaLevelOffset = Number(this.value);
+    simulation.setSeaLevelOffset(Number(this.value));
   }
 
   return html`
@@ -365,6 +378,25 @@ function logBoxHtml() {
   `;
 }
 
+function worldMapHtml() {
+  return html`
+    <div
+      class="flex-1 min-h-0 relative flex items-center justify-center p-4 bg-slate-950 overflow-hidden"
+    >
+      <div
+        class="relative w-full max-w-5xl max-h-full aspect-[2/1] border-2 border-slate-700 rounded-lg overflow-hidden bg-black"
+      >
+        <canvas
+          ${ref(worldMapRef)}
+          width="128"
+          height="64"
+          class="world-map-canvas block h-full w-full"
+        ></canvas>
+      </div>
+    </div>
+  `;
+}
+
 function bodyHtml() {
   return html`
     ${statusBarHtml()}
@@ -380,9 +412,9 @@ function bodyHtml() {
 
       <!-- CENTER VIEWPORT: Canvas Simulation Display & God Tools -->
       <section
-        class="flex-1 flex flex-col bg-slate-950 overflow-hidden relative"
+        class="flex-1 min-h-0 flex flex-col bg-slate-950 overflow-hidden relative"
       >
-    
+        ${worldMapHtml()}
     </section>
     </main>
   `;
@@ -390,6 +422,11 @@ function bodyHtml() {
 
 function renderApp() {
   render(bodyHtml(), document.body);
+  const canvas = worldMapRef.value;
+  if (!canvas) throw new Error('World map canvas was not rendered');
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Could not get the world map canvas context');
+  drawMap(context, simulation.mapPixels(uiState.activeLayer));
 }
 renderApp();
 document.onclick = renderApp;
