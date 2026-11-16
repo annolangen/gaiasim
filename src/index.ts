@@ -2,11 +2,13 @@ import {html, render} from 'lit-html';
 import './style.css';
 import '@fortawesome/fontawesome-free/css/all.min.css';
 
+type MapLayer = 'biomes' | 'temp' | 'moisture' | 'daisies';
+
 const config = {
   year: 0,
   isRunning: false,
   speed: 1,
-  activeLayer: 'biomes', // 'biomes', 'temp', 'moisture', 'daisies'
+  activeLayer: 'biomes' as MapLayer,
   activeTool: 'inspect',
   solarLuminosity: 1.0, // Multiplier
   co2Ppm: 350, // Greenhouse driver
@@ -106,6 +108,17 @@ function statusBarHtml() {
   </header>`;
 }
 
+function layerButtonHtml(layer: MapLayer, label: string, icon: string) {
+  const isSelected = config.activeLayer === layer;
+  return html`<button
+    @click=${() => (config.activeLayer = layer)}
+    aria-pressed=${isSelected}
+    class="px-2.5 py-2 rounded ${isSelected ? 'bg-blue-600 text-white' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'} text-left font-medium flex items-center justify-between"
+  >
+    <span>${label}</span> <i class="fa-solid ${icon} text-[10px]"></i>
+  </button>`;
+}
+
 function layerSwitchHtml() {
   return html` <div class="bg-slate-950 p-3 rounded-lg border border-slate-800">
     <h3
@@ -114,37 +127,22 @@ function layerSwitchHtml() {
       <i class="fa-solid fa-layer-group text-blue-400"></i> Map Display Layer
     </h3>
     <div class="grid grid-cols-2 gap-2 text-xs">
-      <button
-        data-layer="biomes"
-        class="btn-layer active px-2.5 py-2 rounded bg-blue-600 text-white text-left font-medium flex items-center justify-between"
-      >
-        <span>Biomes/Terrain</span> <i class="fa-solid fa-tree text-[10px]"></i>
-      </button>
-      <button
-        data-layer="temp"
-        class="btn-layer px-2.5 py-2 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-left font-medium flex items-center justify-between"
-      >
-        <span>Temperature</span>
-        <i class="fa-solid fa-temperature-half text-[10px]"></i>
-      </button>
-      <button
-        data-layer="moisture"
-        class="btn-layer px-2.5 py-2 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-left font-medium flex items-center justify-between"
-      >
-        <span>Moisture</span> <i class="fa-solid fa-cloud-rain text-[10px]"></i>
-      </button>
-      <button
-        data-layer="daisies"
-        class="btn-layer px-2.5 py-2 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-left font-medium flex items-center justify-between"
-      >
-        <span>Daisyworld</span>
-        <i class="fa-solid fa-sun-plant-wilt text-[10px]"></i>
-      </button>
+      ${layerButtonHtml('biomes', 'Biomes/Terrain', 'fa-tree')}
+      ${layerButtonHtml('temp', 'Temperature', 'fa-temperature-half')}
+      ${layerButtonHtml('moisture', 'Moisture', 'fa-cloud-rain')}
+      ${layerButtonHtml('daisies', 'Daisyworld', 'fa-sun-plant-wilt')}
     </div>
   </div>`;
 }
 
 function atmosphericSlidersHtml() {
+  function resetAtmosphere() {
+    config.solarLuminosity = 1;
+    config.co2Ppm = 350;
+    config.o2Pct = 21;
+    config.seaLevelOffset = 0;
+  }
+
   function solarLuminosityInput(this: HTMLInputElement) {
     config.solarLuminosity = Number(this.value);
   }
@@ -171,7 +169,7 @@ function atmosphericSlidersHtml() {
           Atmosphere Parameters
         </span>
         <button
-          id="btnResetAtmosphere"
+          @click=${resetAtmosphere}
           class="text-[10px] text-blue-400 hover:underline"
         >
           Reset
