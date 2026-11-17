@@ -119,7 +119,7 @@ export function generatePlanet(
   }
 
   recalculateClimate(state, config);
-  return calculateMetrics(state, config);
+  return calculateMetrics(state, config, /*temperatureHistory=*/ []);
 }
 
 /**
@@ -129,6 +129,7 @@ export function generatePlanet(
 export function simulationStep(
   state: SimulationState,
   config: SimulationConfig,
+  temperatureHistory: number[] = [],
 ): SimulationMetrics {
   config.year += 10;
 
@@ -140,7 +141,7 @@ export function simulationStep(
   updateDaisies(state, seaLevel);
 
   classifyBiomes(state, config);
-  return calculateMetrics(state, config);
+  return calculateMetrics(state, config, temperatureHistory);
 }
 
 function updateTemperature(
@@ -348,6 +349,7 @@ export function recalculateClimate(
 export function calculateMetrics(
   state: SimulationState,
   config: SimulationConfig,
+  temperatureHistory: number[],
 ): SimulationMetrics {
   let sumTemp = 0;
   let oceanCount = 0;
@@ -368,9 +370,11 @@ export function calculateMetrics(
     totalWhiteDaisies += state.daisyWhite[i];
     totalBlackDaisies += state.daisyBlack[i];
   }
-
+  const averageTemperatureC = sumTemp / CELL_COUNT;
+  temperatureHistory.push(averageTemperatureC);
   return {
-    averageTemperatureC: sumTemp / CELL_COUNT,
+    averageTemperatureC,
+    temperatureHistory: temperatureHistory.slice(-30),
     oceanCoveragePct: Math.round((oceanCount / CELL_COUNT) * 100),
     totalBiomassPct: Math.round((biomassCount / CELL_COUNT) * 100),
     whiteDaisyCoveragePct: (totalWhiteDaisies / CELL_COUNT) * 100,

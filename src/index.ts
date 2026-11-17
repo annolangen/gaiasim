@@ -1,16 +1,15 @@
-import {html, render} from 'lit-html';
+import {html, render, svg} from 'lit-html';
 import {createRef, ref} from 'lit-html/directives/ref.js';
 import './style.css';
 import '@fortawesome/fontawesome-free/css/all.min.css';
 import {drawMap, createMapPixels} from './map-renderer';
 import type {MapLayer} from './map-renderer';
-import {createSimulationConfig, createSimulationState} from './sim/constants';
 import {
-  calculateMetrics,
-  generatePlanet,
-  recalculateClimate,
-  simulationStep,
-} from './sim/engine';
+  BIOMES,
+  createSimulationConfig,
+  createSimulationState,
+} from './sim/constants';
+import {generatePlanet, recalculateClimate, simulationStep} from './sim/engine';
 
 const uiState = {
   isRunning: false,
@@ -49,6 +48,9 @@ const simulation = (() => {
       stop();
     }
   }
+  function step() {
+    metrics = simulationStep(state, config, metrics.temperatureHistory);
+  }
   return {
     toggle,
     config,
@@ -56,11 +58,11 @@ const simulation = (() => {
       return metrics;
     },
     mapPixels: (layer: MapLayer) => createMapPixels(state, config, layer),
-    step: () => (metrics = simulationStep(state, config)),
+    step,
     setSeaLevelOffset(seaLevelOffset: number) {
       config.seaLevelOffset = seaLevelOffset;
       recalculateClimate(state, config);
-      metrics = calculateMetrics(state, config);
+      step();
     },
     setSpeed(speed: number) {
       uiState.speed = speed;
@@ -74,7 +76,11 @@ function speedButtonHtml(speed: number) {
   return html`<button
     @click=${() => simulation.setSpeed(speed)}
     aria-pressed=${isSelected}
-    class="btn-speed px-2.5 py-1 ${isSelected ? 'bg-blue-600 text-white font-bold' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'} rounded text-xs font-mono"
+    class="btn-speed px-2.5 py-1 ${
+      isSelected
+        ? 'bg-blue-600 text-white font-bold'
+        : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+    } rounded text-xs font-mono"
   >
     ${speed}x
   </button>`;
@@ -145,7 +151,9 @@ function statusBarHtml() {
       <button
         @click=${simulation.toggle}
         aria-pressed=${uiState.isRunning}
-        class="px-3 py-1.5 ${uiState.isRunning ? 'bg-emerald-600' : 'bg-amber-600'} hover:bg-emerald-500 text-white rounded font-bold text-xs flex items-center gap-1.5 transition"
+        class="px-3 py-1.5 ${
+          uiState.isRunning ? 'bg-emerald-600' : 'bg-amber-600'
+        } hover:bg-emerald-500 text-white rounded font-bold text-xs flex items-center gap-1.5 transition"
       >
         <i class="fa-solid fa-play"></i>
         <span> ${uiState.isRunning ? 'PAUSE' : 'RUN'} </span>
@@ -167,7 +175,11 @@ function layerButtonHtml(layer: MapLayer, label: string, icon: string) {
   return html`<button
     @click=${() => (uiState.activeLayer = layer)}
     aria-pressed=${isSelected}
-    class="px-2.5 py-2 rounded ${isSelected ? 'bg-blue-600 text-white' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'} text-left font-medium flex items-center justify-between"
+    class="px-2.5 py-2 rounded ${
+      isSelected
+        ? 'bg-blue-600 text-white'
+        : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
+    } text-left font-medium flex items-center justify-between"
   >
     <span>${label}</span> <i class="fa-solid ${icon} text-[10px]"></i>
   </button>`;
@@ -299,7 +311,9 @@ function atmosphericSlidersHtml() {
             ${
               simulation.config.seaLevelOffset === 0
                 ? 'Baseline'
-                : `${simulation.config.seaLevelOffset > 0 ? '+' : ''}${simulation.config.seaLevelOffset}m`
+                : `${simulation.config.seaLevelOffset > 0 ? '+' : ''}${
+                    simulation.config.seaLevelOffset
+                  }m`
             }
           </span>
         </div>
@@ -397,6 +411,149 @@ function worldMapHtml() {
   `;
 }
 
+function temperatureChartSvg() {
+  const history = simulation.metrics.temperatureHistory;
+  const values = history.length
+    ? history
+    : [simulation.metrics.averageTemperatureC];
+  const minTemperature = Math.min(...values);
+  const maxTemperature = Math.max(...values);
+  const integerEnvelope =
+    Math.ceil(maxTemperature) - Math.floor(minTemperature);
+  const temperatureRange = Math.max(1.2, integerEnvelope);
+  const temperatureCenter = (minTemperature + maxTemperature) / 2;
+  const minTemperatureBound = temperatureCenter - temperatureRange / 2;
+
+  const plot = {left: 32, right: 298, top: 4, bottom: 84};
+  const ticks = Array.from(
+    {length: 6},
+    (_, index) => minTemperatureBound + (temperatureRange * index) / 5,
+  );
+  const yForTemperature = (temperature: number) =>
+    plot.bottom -
+    ((temperature - minTemperatureBound) / temperatureRange) *
+      (plot.bottom - plot.top);
+  const points = values
+    .map((temperature, index) => {
+      const x =
+        plot.left +
+        (index / Math.max(1, values.length - 1)) * (plot.right - plot.left);
+      return `${x},${yForTemperature(temperature)}`;
+    })
+    .join(' ');
+
+  return svg`<svg
+    class="h-full w-full"
+    viewBox="0 0 300 100"
+    preserveAspectRatio="none"
+    role="img"
+    aria-label="Global temperature history"
+  >
+    ${ticks.map(temperature => {
+      const y = yForTemperature(temperature);
+      return svg`<g>
+        <line
+          x1=${plot.left}
+          y1=${y}
+          x2=${plot.right}
+          y2=${y}
+          stroke="#1e293b"
+          stroke-width="1"
+        />
+        <text
+          x=${plot.left - 4}
+          y=${y}
+          fill="#64748b"
+          font-size="8"
+          text-anchor="end"
+          dominant-baseline="middle"
+        >${temperature.toFixed(1)}</text>
+      </g>`;
+    })}
+    <polyline
+      points=${points}
+      fill="none"
+      stroke="#10b981"
+      stroke-width="1.5"
+      vector-effect="non-scaling-stroke"
+    />
+  </svg>`;
+}
+
+function dashBoardHtml() {
+  return html`
+    <div
+      class="h-44 bg-slate-900 border-t border-slate-800 p-3 grid grid-cols-1 md:grid-cols-3 gap-4 z-10 shrink-0"
+    >
+      <!-- Chart 1: Global Temperature & Greenhouse Trend -->
+      <div
+        class="bg-slate-950 p-2 rounded border border-slate-800 flex flex-col justify-between"
+      >
+        <div
+          class="flex justify-between items-center text-[11px] text-slate-400 font-bold uppercase mb-1"
+        >
+          <span>
+            <i class="fa-solid fa-chart-line text-blue-400 mr-1"></i>
+            Global Temp (°C)
+          </span>
+          <span class="text-emerald-400 font-mono">
+            ${simulation.metrics.averageTemperatureC.toFixed(1)}°C
+          </span>
+        </div>
+        <div class="flex-1 relative">${temperatureChartSvg()}</div>
+      </div>
+
+      <!-- Chart 2: Daisyworld Population / Coverage Chart -->
+      <div
+        class="bg-slate-950 p-2 rounded border border-slate-800 flex flex-col justify-between"
+      >
+        <div
+          class="flex justify-between items-center text-[11px] text-slate-400 font-bold uppercase mb-1"
+        >
+          <span>
+            <i class="fa-solid fa-chart-pie text-purple-400 mr-1"></i>
+            Daisy Populations
+          </span>
+          <span class="text-purple-300 font-mono">
+            W:${simulation.metrics.whiteDaisyCoveragePct.toFixed(0)}% /
+            B:${simulation.metrics.blackDaisyCoveragePct.toFixed(0)}%
+          </span>
+        </div>
+        <div class="flex-1 relative">
+          <canvas id="chartDaisies"></canvas>
+        </div>
+      </div>
+
+      <!-- Biome Legend & Distribution Summary -->
+      <div
+        class="bg-slate-950 p-2 rounded border border-slate-800 flex flex-col justify-between overflow-y-auto"
+      >
+        <div
+          class="text-[11px] text-slate-400 font-bold uppercase mb-1.5 flex items-center justify-between"
+        >
+          <span>
+            <i class="fa-solid fa-palette text-amber-400 mr-1"></i>
+            Biome Color Key
+          </span>
+          <span class="text-[10px] text-slate-500 font-mono">128x64 Map</span>
+        </div>
+        <div class="grid grid-cols-3 gap-1.5 text-[10px] font-mono">
+          ${Object.values(BIOMES).map(
+            ({name, color}) =>
+              html`<div class="flex items-center space-x-1.5">
+                <span
+                  class="w-3 h-3 rounded-sm inline-block"
+                  style="background-color: rgb(${color.join(', ')})"
+                ></span>
+                <span class="text-slate-400">${name}</span>
+              </div>`,
+          )}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function bodyHtml() {
   return html`
     ${statusBarHtml()}
@@ -415,6 +572,7 @@ function bodyHtml() {
         class="flex-1 min-h-0 flex flex-col bg-slate-950 overflow-hidden relative"
       >
         ${worldMapHtml()}
+        ${dashBoardHtml()}
     </section>
     </main>
   `;
