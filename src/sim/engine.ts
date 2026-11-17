@@ -119,7 +119,7 @@ export function generatePlanet(
   }
 
   recalculateClimate(state, config);
-  return calculateMetrics(state, config, /*temperatureHistory=*/ []);
+  return calculateMetrics(state, config, [], [], []);
 }
 
 /**
@@ -130,6 +130,8 @@ export function simulationStep(
   state: SimulationState,
   config: SimulationConfig,
   temperatureHistory: number[] = [],
+  whiteDaisyHistory: number[] = [],
+  blackDaisyHistory: number[] = [],
 ): SimulationMetrics {
   config.year += 10;
 
@@ -141,7 +143,13 @@ export function simulationStep(
   updateDaisies(state, seaLevel);
 
   classifyBiomes(state, config);
-  return calculateMetrics(state, config, temperatureHistory);
+  return calculateMetrics(
+    state,
+    config,
+    temperatureHistory,
+    whiteDaisyHistory,
+    blackDaisyHistory,
+  );
 }
 
 function updateTemperature(
@@ -350,6 +358,8 @@ export function calculateMetrics(
   state: SimulationState,
   config: SimulationConfig,
   temperatureHistory: number[],
+  whiteDaisyHistory: number[],
+  blackDaisyHistory: number[],
 ): SimulationMetrics {
   let sumTemp = 0;
   let oceanCount = 0;
@@ -371,14 +381,20 @@ export function calculateMetrics(
     totalBlackDaisies += state.daisyBlack[i];
   }
   const averageTemperatureC = sumTemp / CELL_COUNT;
+  const whiteDaisyCoveragePct = (totalWhiteDaisies / CELL_COUNT) * 100;
+  const blackDaisyCoveragePct = (totalBlackDaisies / CELL_COUNT) * 100;
   temperatureHistory.push(averageTemperatureC);
+  whiteDaisyHistory.push(whiteDaisyCoveragePct);
+  blackDaisyHistory.push(blackDaisyCoveragePct);
   return {
     averageTemperatureC,
     temperatureHistory: temperatureHistory.slice(-30),
+    whiteDaisyHistory: whiteDaisyHistory.slice(-30),
+    blackDaisyHistory: blackDaisyHistory.slice(-30),
     oceanCoveragePct: Math.round((oceanCount / CELL_COUNT) * 100),
     totalBiomassPct: Math.round((biomassCount / CELL_COUNT) * 100),
-    whiteDaisyCoveragePct: (totalWhiteDaisies / CELL_COUNT) * 100,
-    blackDaisyCoveragePct: (totalBlackDaisies / CELL_COUNT) * 100,
+    whiteDaisyCoveragePct,
+    blackDaisyCoveragePct,
   };
 }
 

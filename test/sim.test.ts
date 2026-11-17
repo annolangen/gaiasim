@@ -101,6 +101,11 @@ void test('simulationStep advances time, clears submerged daisies, and reports m
   strictEqual(metrics.oceanCoveragePct, 100);
   strictEqual(metrics.whiteDaisyCoveragePct, 0);
   strictEqual(metrics.blackDaisyCoveragePct, 0);
+  strictEqual(metrics.temperatureHistory.length, 1);
+  strictEqual(metrics.whiteDaisyHistory.length, 1);
+  strictEqual(metrics.blackDaisyHistory.length, 1);
+  strictEqual(metrics.whiteDaisyHistory[0], 0);
+  strictEqual(metrics.blackDaisyHistory[0], 0);
   strictEqual(state.biome[0], BIOMES.OCEAN.id);
 });
 
@@ -113,6 +118,34 @@ void test('simulationStep cools land by the standard lapse rate', () => {
   simulationStep(state, config);
 
   strictEqual(Math.round(state.temperature[equatorCell] * 100) / 100, 5.7);
+});
+
+void test('simulationStep records white and black daisy coverage history', () => {
+  const state = createSimulationState();
+  const config = createSimulationConfig();
+  state.elevation.fill(100);
+  state.daisyWhite.fill(0.2);
+  state.daisyBlack.fill(0.1);
+
+  const firstMetrics = simulationStep(state, config);
+  const secondMetrics = simulationStep(
+    state,
+    config,
+    firstMetrics.temperatureHistory,
+    firstMetrics.whiteDaisyHistory,
+    firstMetrics.blackDaisyHistory,
+  );
+
+  strictEqual(secondMetrics.whiteDaisyHistory.length, 2);
+  strictEqual(secondMetrics.blackDaisyHistory.length, 2);
+  strictEqual(
+    secondMetrics.whiteDaisyHistory[1],
+    secondMetrics.whiteDaisyCoveragePct,
+  );
+  strictEqual(
+    secondMetrics.blackDaisyHistory[1],
+    secondMetrics.blackDaisyCoveragePct,
+  );
 });
 
 void test('volcano brush wraps at the longitude edge and tapers by radius', () => {

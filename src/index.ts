@@ -10,6 +10,7 @@ import {
   createSimulationState,
 } from './sim/constants';
 import {generatePlanet, recalculateClimate, simulationStep} from './sim/engine';
+import type {PlanetType} from './sim/types';
 
 const uiState = {
   isRunning: false,
@@ -49,7 +50,13 @@ const simulation = (() => {
     }
   }
   function step() {
-    metrics = simulationStep(state, config, metrics.temperatureHistory);
+    metrics = simulationStep(
+      state,
+      config,
+      metrics.temperatureHistory,
+      metrics.whiteDaisyHistory,
+      metrics.blackDaisyHistory,
+    );
   }
   return {
     toggle,
@@ -58,6 +65,9 @@ const simulation = (() => {
       return metrics;
     },
     mapPixels: (layer: MapLayer) => createMapPixels(state, config, layer),
+    generate(type: PlanetType) {
+      metrics = generatePlanet(state, config, type);
+    },
     step,
     setSeaLevelOffset(seaLevelOffset: number) {
       config.seaLevelOffset = seaLevelOffset;
@@ -343,24 +353,28 @@ function preetsHtml() {
       <div class="grid grid-cols-2 gap-2 text-xs">
         <button
           id="presetEarth"
+          @click=${() => simulation.generate('earth')}
           class="px-2 py-1.5 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 font-mono"
         >
           Earth-like
         </button>
         <button
           id="presetPangaea"
+          @click=${() => simulation.generate('pangaea')}
           class="px-2 py-1.5 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 font-mono"
         >
           Pangaea
         </button>
         <button
           id="presetArchipelago"
+          @click=${() => simulation.generate('archipelago')}
           class="px-2 py-1.5 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 font-mono"
         >
           Islands
         </button>
         <button
           id="presetDaisyworld"
+          @click=${() => simulation.generate('daisyworld')}
           class="px-2 py-1.5 bg-purple-900/40 hover:bg-purple-800/50 border border-purple-500/30 text-purple-200 rounded font-mono"
         >
           Daisyworld
@@ -480,6 +494,73 @@ function temperatureChartSvg() {
   </svg>`;
 }
 
+function daisyChartSvg() {
+  const whiteHistory = simulation.metrics.whiteDaisyHistory;
+  const blackHistory = simulation.metrics.blackDaisyHistory;
+  const maxCoverage = Math.max(0, ...whiteHistory, ...blackHistory);
+  const coverageRange = maxCoverage > 0 ? maxCoverage * 1.1 : 1;
+  const plot = {left: 32, right: 298, top: 4, bottom: 84};
+  const ticks = Array.from(
+    {length: 5},
+    (_, index) => (coverageRange * index) / 4,
+  );
+  const yForCoverage = (coverage: number) =>
+    plot.bottom - (coverage / coverageRange) * (plot.bottom - plot.top);
+  const linePoints = (history: number[]) =>
+    history
+      .map((coverage, index) => {
+        const x =
+          plot.left +
+          (index / Math.max(1, history.length - 1)) * (plot.right - plot.left);
+        return `${x},${yForCoverage(coverage)}`;
+      })
+      .join(' ');
+
+  return svg`<svg
+    class="h-full w-full"
+    viewBox="0 0 300 100"
+    preserveAspectRatio="none"
+    role="img"
+    aria-label="White and black daisy coverage history"
+  >
+    ${ticks.map(coverage => {
+      const y = yForCoverage(coverage);
+      return svg`<g>
+        <line
+          x1=${plot.left}
+          y1=${y}
+          x2=${plot.right}
+          y2=${y}
+          stroke="#1e293b"
+          stroke-width="1"
+        />
+        <text
+          x=${plot.left - 4}
+          y=${y}
+          fill="#64748b"
+          font-size="8"
+          text-anchor="end"
+          dominant-baseline="middle"
+        >${coverage.toFixed(coverageRange < 1 ? 2 : 1)}%</text>
+      </g>`;
+    })}
+    <polyline
+      points=${linePoints(whiteHistory)}
+      fill="none"
+      stroke="#f8fafc"
+      stroke-width="1.5"
+      vector-effect="non-scaling-stroke"
+    />
+    <polyline
+      points=${linePoints(blackHistory)}
+      fill="none"
+      stroke="#64748b"
+      stroke-width="1.5"
+      vector-effect="non-scaling-stroke"
+    />
+  </svg>`;
+}
+
 function dashBoardHtml() {
   return html`
     <div
@@ -515,13 +596,11 @@ function dashBoardHtml() {
             Daisy Populations
           </span>
           <span class="text-purple-300 font-mono">
-            W:${simulation.metrics.whiteDaisyCoveragePct.toFixed(0)}% /
-            B:${simulation.metrics.blackDaisyCoveragePct.toFixed(0)}%
+            W:${simulation.metrics.whiteDaisyCoveragePct.toFixed(1)}% /
+            B:${simulation.metrics.blackDaisyCoveragePct.toFixed(1)}%
           </span>
         </div>
-        <div class="flex-1 relative">
-          <canvas id="chartDaisies"></canvas>
-        </div>
+        <div class="flex-1 relative">${daisyChartSvg()}</div>
       </div>
 
       <!-- Biome Legend & Distribution Summary -->

@@ -50,6 +50,8 @@ export interface SimulationMetrics {
   /** Unrounded mean across all grid cells, including ocean cells. */
   averageTemperatureC: number;
   temperatureHistory: number[];
+  whiteDaisyHistory: number[];
+  blackDaisyHistory: number[];
   /** Percentage of cells whose elevation is at or below sea level. */
   oceanCoveragePct: number;
   /** Percentage of cells classified from grassland through swamp, inclusive. */
