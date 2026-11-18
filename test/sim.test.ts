@@ -148,6 +148,20 @@ void test('simulationStep records white and black daisy coverage history', () =>
   );
 });
 
+void test('simulationStep spreads daisies to adjacent habitable bare land', () => {
+  const state = createSimulationState();
+  const config = createSimulationConfig();
+  state.elevation.fill(100);
+  state.temperature.fill(22.5);
+  const centerIdx = getIdx(10, 32);
+  const neighborIdx = getIdx(11, 32);
+  state.daisyWhite[centerIdx] = 0.6;
+
+  simulationStep(state, config);
+
+  strictEqual(state.daisyWhite[neighborIdx] > 0, true);
+});
+
 void test('volcano brush wraps at the longitude edge and tapers by radius', () => {
   const state = createSimulationState();
   const config = createSimulationConfig();
@@ -223,7 +237,7 @@ void test('createMapPixels renders the selected layer as opaque RGBA pixels', ()
   );
   deepStrictEqual(
     Array.from(createMapPixels(state, config, 'daisies').slice(0, 4)),
-    [240, 240, 255, 255],
+    [79, 86, 98, 255],
   );
 
   state.moisture[0] = 150;

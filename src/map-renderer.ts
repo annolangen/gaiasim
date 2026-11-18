@@ -42,9 +42,14 @@ export function createMapPixels(
       if (state.elevation[index] <= config.seaLevelOffset) {
         return BIOMES.OCEAN.color;
       }
-      if (state.daisyWhite[index] > 0.05) return [240, 240, 255];
-      if (state.daisyBlack[index] > 0.05) return [40, 40, 50];
-      return [30, 35, 45];
+      const white = Math.max(0, Math.min(1, state.daisyWhite[index]));
+      const black = Math.max(0, Math.min(1, state.daisyBlack[index]));
+      const bare = Math.max(0, 1 - white - black);
+      return [
+        Math.round(bare * 60 + white * 245 + black * 12),
+        Math.round(bare * 68 + white * 248 + black * 14),
+        Math.round(bare * 80 + white * 255 + black * 20),
+      ];
     },
   };
   const paint = paintByLayer[layer];

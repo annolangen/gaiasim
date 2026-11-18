@@ -220,8 +220,20 @@ function updateMoisture(state: SimulationState, seaLevel: number): void {
 }
 
 function updateDaisies(state: SimulationState, seaLevel: number): void {
-  for (let i = 0; i < CELL_COUNT; i++) {
-    if (state.elevation[i] > seaLevel) {
+  const prevWhite = new Float32Array(state.daisyWhite);
+  const prevBlack = new Float32Array(state.daisyBlack);
+  const deathRate = 0.1;
+  const spreadRate = 0.03;
+
+  for (let y = 0; y < GRID_HEIGHT; y++) {
+    for (let x = 0; x < GRID_WIDTH; x++) {
+      const i = getIdx(x, y);
+      if (state.elevation[i] <= seaLevel) {
+        state.daisyWhite[i] = 0;
+        state.daisyBlack[i] = 0;
+        continue;
+      }
+
       const temperature = state.temperature[i];
       let growthRate = 0;
       // The quadratic response peaks at 22.5°C and is disabled outside 5-40°C.
@@ -229,25 +241,49 @@ function updateDaisies(state: SimulationState, seaLevel: number): void {
         growthRate = 1 - 0.00326 * Math.pow(22.5 - temperature, 2);
       }
 
-      // Both daisy types share this temperature response and fixed per-tick death rate.
-      const deathRate = 0.1;
-      const white = state.daisyWhite[i];
-      const black = state.daisyBlack[i];
+      const white = prevWhite[i];
+      const black = prevBlack[i];
       const bareSpace = Math.max(0, 1 - white - black);
 
-      if (white > 0.01 || black > 0.01) {
-        state.daisyWhite[i] = Math.max(
-          0,
-          Math.min(1, white + white * (bareSpace * growthRate - deathRate)),
-        );
-        state.daisyBlack[i] = Math.max(
-          0,
-          Math.min(1, black + black * (bareSpace * growthRate - deathRate)),
-        );
+      let nextWhite = white + white * (bareSpace * growthRate - deathRate);
+      let nextBlack = black + black * (bareSpace * growthRate - deathRate);
+
+      // Seed bare habitable land from neighboring colonized cells.
+      if (growthRate > deathRate && bareSpace > 0.05) {
+        const neighbors = [
+          getIdx(x - 1, y),
+          getIdx(x + 1, y),
+          getIdx(x, y - 1),
+          getIdx(x, y + 1),
+        ];
+        let maxNeighborWhite = 0;
+        let maxNeighborBlack = 0;
+        for (const nIdx of neighbors) {
+          if (prevWhite[nIdx] > maxNeighborWhite) {
+            maxNeighborWhite = prevWhite[nIdx];
+          }
+          if (prevBlack[nIdx] > maxNeighborBlack) {
+            maxNeighborBlack = prevBlack[nIdx];
+          }
+        }
+        if (maxNeighborWhite > 0.1) {
+          nextWhite += maxNeighborWhite * bareSpace * growthRate * spreadRate;
+        }
+        if (maxNeighborBlack > 0.1) {
+          nextBlack += maxNeighborBlack * bareSpace * growthRate * spreadRate;
+        }
       }
-    } else {
-      state.daisyWhite[i] = 0;
-      state.daisyBlack[i] = 0;
+
+      nextWhite = nextWhite < 0.001 ? 0 : Math.min(1, nextWhite);
+      nextBlack = nextBlack < 0.001 ? 0 : Math.min(1, nextBlack);
+      const total = nextWhite + nextBlack;
+      if (total > 1) {
+        nextWhite /= total;
+        nextBlack /= total;
+      }
+
+      state.daisyWhite[i] = nextWhite;
+      state.daisyBlack[i] = nextBlack;
     }
   }
 }
@@ -388,9 +424,9 @@ export function calculateMetrics(
   blackDaisyHistory.push(blackDaisyCoveragePct);
   return {
     averageTemperatureC,
-    temperatureHistory: temperatureHistory.slice(-30),
-    whiteDaisyHistory: whiteDaisyHistory.slice(-30),
-    blackDaisyHistory: blackDaisyHistory.slice(-30),
+    temperatureHistory: temperatureHistory.slice(-300),
+    whiteDaisyHistory: whiteDaisyHistory.slice(-300),
+    blackDaisyHistory: blackDaisyHistory.slice(-300),
     oceanCoveragePct: Math.round((oceanCount / CELL_COUNT) * 100),
     totalBiomassPct: Math.round((biomassCount / CELL_COUNT) * 100),
     whiteDaisyCoveragePct,

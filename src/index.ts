@@ -46,6 +46,7 @@ const uiState = {
   speed: 1,
   activeLayer: 'biomes' as MapLayer,
   activeTool: 'inspect' as GodTool,
+  activePreset: 'earth' as PlanetType,
   hoveredCell: null as {x: number; y: number} | null,
   logs: [
     {message: 'Simulation core initialized [128x64].', tone: 'emerald'},
@@ -120,6 +121,7 @@ const simulation = (() => {
     },
     mapPixels: (layer: MapLayer) => createMapPixels(state, config, layer),
     generate(type: PlanetType) {
+      uiState.activePreset = type;
       metrics = generatePlanet(state, config, type);
       logEvent(`Planet generated: Presets [${type.toUpperCase()}].`, 'emerald');
     },
@@ -268,7 +270,7 @@ function statusBarHtml() {
         <i class="fa-solid fa-forward-step"></i>
       </button>
       <div class="h-4 w-px bg-slate-800 mx-1"></div>
-      ${speedButtonHtml(1)} ${speedButtonHtml(2)} ${speedButtonHtml(5)}
+      ${[1, 2, 5].map(s => speedButtonHtml(s))}
     </div>
   </header>`;
 }
@@ -434,6 +436,17 @@ function atmosphericSlidersHtml() {
   `;
 }
 
+const GENERATOR_PRESETS: readonly {
+  id: string;
+  type: PlanetType;
+  label: string;
+}[] = [
+  {id: 'presetEarth', type: 'earth', label: 'Earth-like'},
+  {id: 'presetPangaea', type: 'pangaea', label: 'Pangaea'},
+  {id: 'presetArchipelago', type: 'archipelago', label: 'Islands'},
+  {id: 'presetDaisyworld', type: 'daisyworld', label: 'Daisyworld'},
+];
+
 function presetsHtml() {
   return html`
     <div class="bg-slate-950 p-3 rounded-lg border border-slate-800">
@@ -444,34 +457,21 @@ function presetsHtml() {
         Generator Presets
       </h3>
       <div class="grid grid-cols-2 gap-2 text-xs">
-        <button
-          id="presetEarth"
-          @click=${() => simulation.generate('earth')}
-          class="px-2 py-1.5 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 font-mono"
-        >
-          Earth-like
-        </button>
-        <button
-          id="presetPangaea"
-          @click=${() => simulation.generate('pangaea')}
-          class="px-2 py-1.5 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 font-mono"
-        >
-          Pangaea
-        </button>
-        <button
-          id="presetArchipelago"
-          @click=${() => simulation.generate('archipelago')}
-          class="px-2 py-1.5 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 font-mono"
-        >
-          Islands
-        </button>
-        <button
-          id="presetDaisyworld"
-          @click=${() => simulation.generate('daisyworld')}
-          class="px-2 py-1.5 bg-purple-900/40 hover:bg-purple-800/50 border border-purple-500/30 text-purple-200 rounded font-mono"
-        >
-          Daisyworld
-        </button>
+        ${GENERATOR_PRESETS.map(preset => {
+          const isSelected = uiState.activePreset === preset.type;
+          return html`<button
+            id=${preset.id}
+            aria-pressed=${isSelected}
+            @click=${() => simulation.generate(preset.type)}
+            class="px-2 py-1.5 rounded font-mono ${
+              isSelected
+                ? 'bg-blue-600 text-white font-medium'
+                : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
+            }"
+          >
+            ${preset.label}
+          </button>`;
+        })}
       </div>
     </div>
   `;
@@ -719,24 +719,102 @@ function worldMapHtml() {
       class="flex-1 min-h-0 relative flex items-center justify-center p-4 bg-slate-950 overflow-hidden"
     >
       <div
-        class="relative w-full max-w-5xl max-h-full aspect-[2/1] border-2 border-slate-700 rounded-lg overflow-hidden bg-black"
+        class="w-full h-full flex items-center justify-center"
+        style="container-type: size"
       >
-        <canvas
-          ${ref(worldMapRef)}
-          width="128"
-          height="64"
-          @mousemove=${handleMouseMove}
-          @mouseout=${handleMouseOut}
-          @click=${handleClick}
-          class="world-map-canvas cursor-crosshair block h-full w-full"
-        ></canvas>
-        ${gridTooltipHtml()}
+        <div
+          class="relative border-2 border-slate-700 rounded-lg overflow-hidden bg-black"
+          style="width: min(100cqw, 200cqh); height: min(100cqh, 50cqw);"
+        >
+          <canvas
+            ${ref(worldMapRef)}
+            width="128"
+            height="64"
+            @mousemove=${handleMouseMove}
+            @mouseout=${handleMouseOut}
+            @click=${handleClick}
+            class="world-map-canvas cursor-crosshair block h-full w-full"
+          ></canvas>
+          ${gridTooltipHtml()}
+        </div>
       </div>
     </div>
   `;
 }
 
-function temperatureChartSvg() {
+interface ChartSeries {
+  values: readonly number[];
+  stroke: string;
+}
+
+function lineChartHtml(
+  ariaLabel: string,
+  minBound: number,
+  range: number,
+  ticks: readonly number[],
+  formatTick: (value: number) => string,
+  series: readonly ChartSeries[],
+) {
+  const topPct = 6;
+  const bottomPct = 94;
+  const yPctForValue = (value: number) =>
+    bottomPct - ((value - minBound) / range) * (bottomPct - topPct);
+
+  const linePoints = (values: readonly number[]) =>
+    values
+      .map((value, index) => {
+        const x = (index / Math.max(1, values.length - 1)) * 100;
+        return `${x},${yPctForValue(value)}`;
+      })
+      .join(' ');
+
+  return html`<div class="h-full w-full flex items-stretch gap-1.5">
+    <div class="relative w-10 shrink-0 font-mono text-[9px] text-slate-500">
+      ${ticks.map(
+        tick =>
+          html`<span
+            class="absolute right-0 leading-none"
+            style="top: ${yPctForValue(tick)}%; transform: translateY(-50%);"
+          >
+            ${formatTick(tick)}
+          </span>`,
+      )}
+    </div>
+    <div class="flex-1 min-w-0 h-full">
+      ${svg`<svg
+        class="h-full w-full"
+        viewBox="0 0 100 100"
+        preserveAspectRatio="none"
+        role="img"
+        aria-label=${ariaLabel}
+      >
+        ${ticks.map(tick => {
+          const y = yPctForValue(tick);
+          return svg`<line
+            x1="0"
+            y1=${y}
+            x2="100"
+            y2=${y}
+            stroke="#1e293b"
+            stroke-width="1"
+            vector-effect="non-scaling-stroke"
+          />`;
+        })}
+        ${series.map(
+          ({values, stroke}) => svg`<polyline
+            points=${linePoints(values)}
+            fill="none"
+            stroke=${stroke}
+            stroke-width="1.5"
+            vector-effect="non-scaling-stroke"
+          />`,
+        )}
+      </svg>`}
+    </div>
+  </div>`;
+}
+
+function temperatureChartHtml() {
   const history = simulation.metrics.temperatureHistory;
   const values = history.length
     ? history
@@ -748,141 +826,56 @@ function temperatureChartSvg() {
   const temperatureRange = Math.max(1.2, integerEnvelope);
   const temperatureCenter = (minTemperature + maxTemperature) / 2;
   const minTemperatureBound = temperatureCenter - temperatureRange / 2;
-
-  const plot = {left: 32, right: 298, top: 4, bottom: 84};
   const ticks = Array.from(
     {length: 6},
     (_, index) => minTemperatureBound + (temperatureRange * index) / 5,
   );
-  const yForTemperature = (temperature: number) =>
-    plot.bottom -
-    ((temperature - minTemperatureBound) / temperatureRange) *
-      (plot.bottom - plot.top);
-  const points = values
-    .map((temperature, index) => {
-      const x =
-        plot.left +
-        (index / Math.max(1, values.length - 1)) * (plot.right - plot.left);
-      return `${x},${yForTemperature(temperature)}`;
-    })
-    .join(' ');
 
-  return svg`<svg
-    class="h-full w-full"
-    viewBox="0 0 300 100"
-    preserveAspectRatio="none"
-    role="img"
-    aria-label="Global temperature history"
-  >
-    ${ticks.map(temperature => {
-      const y = yForTemperature(temperature);
-      return svg`<g>
-        <line
-          x1=${plot.left}
-          y1=${y}
-          x2=${plot.right}
-          y2=${y}
-          stroke="#1e293b"
-          stroke-width="1"
-        />
-        <text
-          x=${plot.left - 4}
-          y=${y}
-          fill="#64748b"
-          font-size="8"
-          text-anchor="end"
-          dominant-baseline="middle"
-        >${temperature.toFixed(1)}</text>
-      </g>`;
-    })}
-    <polyline
-      points=${points}
-      fill="none"
-      stroke="#10b981"
-      stroke-width="1.5"
-      vector-effect="non-scaling-stroke"
-    />
-  </svg>`;
+  return lineChartHtml(
+    'Global temperature history',
+    minTemperatureBound,
+    temperatureRange,
+    ticks,
+    temperature => temperature.toFixed(1),
+    [{values, stroke: '#10b981'}],
+  );
 }
 
-function daisyChartSvg() {
+function daisyChartHtml() {
   const whiteHistory = simulation.metrics.whiteDaisyHistory;
   const blackHistory = simulation.metrics.blackDaisyHistory;
   const maxCoverage = Math.max(0, ...whiteHistory, ...blackHistory);
   const coverageRange = maxCoverage > 0 ? maxCoverage * 1.1 : 1;
-  const plot = {left: 32, right: 298, top: 4, bottom: 84};
   const ticks = Array.from(
     {length: 5},
     (_, index) => (coverageRange * index) / 4,
   );
-  const yForCoverage = (coverage: number) =>
-    plot.bottom - (coverage / coverageRange) * (plot.bottom - plot.top);
-  const linePoints = (history: number[]) =>
-    history
-      .map((coverage, index) => {
-        const x =
-          plot.left +
-          (index / Math.max(1, history.length - 1)) * (plot.right - plot.left);
-        return `${x},${yForCoverage(coverage)}`;
-      })
-      .join(' ');
+  const decimals = coverageRange < 1 ? 2 : 1;
 
-  return svg`<svg
-    class="h-full w-full"
-    viewBox="0 0 300 100"
-    preserveAspectRatio="none"
-    role="img"
-    aria-label="White and black daisy coverage history"
-  >
-    ${ticks.map(coverage => {
-      const y = yForCoverage(coverage);
-      return svg`<g>
-        <line
-          x1=${plot.left}
-          y1=${y}
-          x2=${plot.right}
-          y2=${y}
-          stroke="#1e293b"
-          stroke-width="1"
-        />
-        <text
-          x=${plot.left - 4}
-          y=${y}
-          fill="#64748b"
-          font-size="8"
-          text-anchor="end"
-          dominant-baseline="middle"
-        >${coverage.toFixed(coverageRange < 1 ? 2 : 1)}%</text>
-      </g>`;
-    })}
-    <polyline
-      points=${linePoints(whiteHistory)}
-      fill="none"
-      stroke="#f8fafc"
-      stroke-width="1.5"
-      vector-effect="non-scaling-stroke"
-    />
-    <polyline
-      points=${linePoints(blackHistory)}
-      fill="none"
-      stroke="#64748b"
-      stroke-width="1.5"
-      vector-effect="non-scaling-stroke"
-    />
-  </svg>`;
+  return lineChartHtml(
+    'White and black daisy coverage history',
+    0,
+    coverageRange,
+    ticks,
+    coverage => `${coverage.toFixed(decimals)}%`,
+    [
+      {values: whiteHistory, stroke: '#f8fafc'},
+      {values: blackHistory, stroke: '#64748b'},
+    ],
+  );
 }
 
 function dashBoardHtml() {
   return html`
     <div
-      class="h-44 bg-slate-900 border-t border-slate-800 p-3 grid grid-cols-1 md:grid-cols-3 gap-4 z-10 shrink-0"
+      class="h-44 bg-slate-900 border-t border-slate-800 p-3 grid grid-cols-1 md:grid-cols-3 md:grid-rows-1 gap-4 z-10 shrink-0 min-h-0"
     >
       <!-- Chart 1: Global Temperature & Greenhouse Trend -->
       <div
-        class="bg-slate-950 p-2 rounded border border-slate-800 flex flex-col justify-between"
+        class="bg-slate-950 p-2 rounded border border-slate-800 flex flex-col justify-between min-h-0 overflow-hidden"
       >
         <div
-          class="flex justify-between items-center text-[11px] text-slate-400 font-bold uppercase mb-1"
+          class="flex justify-between items-center text-[11px] text-slate-400 font-bold uppercase mb-1 shrink-0"
         >
           <span>
             <i class="fa-solid fa-chart-line text-blue-400 mr-1"></i>
@@ -892,15 +885,15 @@ function dashBoardHtml() {
             ${simulation.metrics.averageTemperatureC.toFixed(1)}°C
           </span>
         </div>
-        <div class="flex-1 relative">${temperatureChartSvg()}</div>
+        <div class="flex-1 min-h-0 relative">${temperatureChartHtml()}</div>
       </div>
 
       <!-- Chart 2: Daisyworld Population / Coverage Chart -->
       <div
-        class="bg-slate-950 p-2 rounded border border-slate-800 flex flex-col justify-between"
+        class="bg-slate-950 p-2 rounded border border-slate-800 flex flex-col justify-between min-h-0 overflow-hidden"
       >
         <div
-          class="flex justify-between items-center text-[11px] text-slate-400 font-bold uppercase mb-1"
+          class="flex justify-between items-center text-[11px] text-slate-400 font-bold uppercase mb-1 shrink-0"
         >
           <span>
             <i class="fa-solid fa-chart-pie text-purple-400 mr-1"></i>
@@ -911,15 +904,15 @@ function dashBoardHtml() {
             B:${simulation.metrics.blackDaisyCoveragePct.toFixed(1)}%
           </span>
         </div>
-        <div class="flex-1 relative">${daisyChartSvg()}</div>
+        <div class="flex-1 min-h-0 relative">${daisyChartHtml()}</div>
       </div>
 
       <!-- Biome Legend & Distribution Summary -->
       <div
-        class="bg-slate-950 p-2 rounded border border-slate-800 flex flex-col justify-between overflow-y-auto"
+        class="bg-slate-950 p-2 rounded border border-slate-800 flex flex-col justify-between min-h-0 overflow-y-auto"
       >
         <div
-          class="text-[11px] text-slate-400 font-bold uppercase mb-1.5 flex items-center justify-between"
+          class="text-[11px] text-slate-400 font-bold uppercase mb-1.5 flex items-center justify-between shrink-0"
         >
           <span>
             <i class="fa-solid fa-palette text-amber-400 mr-1"></i>
@@ -927,15 +920,17 @@ function dashBoardHtml() {
           </span>
           <span class="text-[10px] text-slate-500 font-mono">128x64 Map</span>
         </div>
-        <div class="grid grid-cols-3 gap-1.5 text-[10px] font-mono">
+        <div class="grid grid-cols-3 gap-x-2 gap-y-1 text-[10px] font-mono">
           ${Object.values(BIOMES).map(
             ({name, color}) =>
-              html`<div class="flex items-center space-x-1.5">
+              html`<div class="flex items-center space-x-1.5 min-w-0">
                 <span
-                  class="w-3 h-3 rounded-sm inline-block"
+                  class="w-3 h-3 rounded-sm inline-block shrink-0"
                   style="background-color: rgb(${color.join(', ')})"
                 ></span>
-                <span class="text-slate-400">${name}</span>
+                <span class="text-slate-400 truncate" title=${name}>
+                  ${name}
+                </span>
               </div>`,
           )}
         </div>
@@ -947,7 +942,7 @@ function dashBoardHtml() {
 function bodyHtml() {
   return html`
     ${statusBarHtml()}
-    <main class="flex-1 flex overflow-hidden relative">
+    <main class="flex-1 min-h-0 flex overflow-hidden relative">
       <!-- LEFT SIDEBAR: Atmospheric & Global Sliders -->
       <aside
         class="w-80 bg-slate-900 border-r border-slate-800 p-4 flex flex-col gap-4 shrink-0 overflow-y-auto"
