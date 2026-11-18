@@ -8,18 +8,60 @@ import {
   BIOMES,
   createSimulationConfig,
   createSimulationState,
+  GRID_HEIGHT,
+  GRID_WIDTH,
 } from './sim/constants';
-import {generatePlanet, recalculateClimate, simulationStep} from './sim/engine';
-import type {PlanetType} from './sim/types';
+import {
+  applyGodTool,
+  calculateMetrics,
+  generatePlanet,
+  getIdx,
+  recalculateClimate,
+  simulationStep,
+} from './sim/engine';
+import type {GodTool, PlanetType} from './sim/types';
+
+interface EventLogEntry {
+  message: string;
+  tone: 'info' | 'emerald' | 'amber' | 'cyan' | 'red' | 'muted';
+}
+
+const LOG_TONE_CLASSES: Record<EventLogEntry['tone'], string> = {
+  info: 'text-slate-300',
+  emerald: 'text-emerald-400',
+  amber: 'text-amber-400',
+  cyan: 'text-cyan-400',
+  red: 'text-red-400',
+  muted: 'text-slate-500',
+};
+
+const BIOME_NAMES = new Map<number, string>(
+  Object.values(BIOMES).map(({id, name}) => [id, name]),
+);
+
+const MAX_LOG_ENTRIES = 100;
 
 const uiState = {
   isRunning: false,
   speed: 1,
   activeLayer: 'biomes' as MapLayer,
-  activeTool: 'inspect',
+  activeTool: 'inspect' as GodTool,
+  hoveredCell: null as {x: number; y: number} | null,
+  logs: [
+    {message: 'Simulation core initialized [128x64].', tone: 'emerald'},
+    {message: 'Select a God Tool to alter surface.', tone: 'muted'},
+  ] as EventLogEntry[],
 };
 const SIMULATION_TICK_INTERVAL_MS = 1_000;
 const worldMapRef = createRef<HTMLCanvasElement>();
+const eventConsoleRef = createRef<HTMLDivElement>();
+
+function logEvent(message: string, tone: EventLogEntry['tone'] = 'info') {
+  uiState.logs.push({message, tone});
+  if (uiState.logs.length > MAX_LOG_ENTRIES) {
+    uiState.logs.splice(0, uiState.logs.length - MAX_LOG_ENTRIES);
+  }
+}
 
 const simulation = (() => {
   const state = createSimulationState();
@@ -58,6 +100,18 @@ const simulation = (() => {
       metrics.blackDaisyHistory,
     );
   }
+
+  /** Recompute summary metrics after terrain/sea-level edits without advancing the year or chart history. */
+  function refreshMetrics() {
+    const next = calculateMetrics(state, config, [], [], []);
+    metrics = {
+      ...next,
+      temperatureHistory: metrics.temperatureHistory,
+      whiteDaisyHistory: metrics.whiteDaisyHistory,
+      blackDaisyHistory: metrics.blackDaisyHistory,
+    };
+  }
+
   return {
     toggle,
     config,
@@ -67,16 +121,53 @@ const simulation = (() => {
     mapPixels: (layer: MapLayer) => createMapPixels(state, config, layer),
     generate(type: PlanetType) {
       metrics = generatePlanet(state, config, type);
+      logEvent(`Planet generated: Presets [${type.toUpperCase()}].`, 'emerald');
     },
     step,
     setSeaLevelOffset(seaLevelOffset: number) {
       config.seaLevelOffset = seaLevelOffset;
       recalculateClimate(state, config);
-      step();
+      refreshMetrics();
     },
     setSpeed(speed: number) {
       uiState.speed = speed;
       if (uiState.isRunning) start();
+    },
+    applyTool(gx: number, gy: number) {
+      if (uiState.activeTool === 'inspect') return;
+      applyGodTool(state, config, uiState.activeTool, gx, gy);
+      refreshMetrics();
+      logEvent(
+        `Intervention triggered: [${uiState.activeTool.toUpperCase()}] at grid (${gx}, ${gy}).`,
+        'amber',
+      );
+    },
+    triggerIceAge() {
+      config.solarLuminosity = 0.75;
+      config.co2Ppm = 100;
+      logEvent(
+        'GLOBAL EVENT: Ice Age triggered! Solar radiation dropped.',
+        'cyan',
+      );
+    },
+    triggerGlobalWarming() {
+      config.solarLuminosity = 1.25;
+      config.co2Ppm = 2000;
+      logEvent(
+        'GLOBAL EVENT: Scorch sequence active! Thermal greenhouse surge.',
+        'red',
+      );
+    },
+    getCellInfo(gx: number, gy: number) {
+      const idx = getIdx(gx, gy);
+      return {
+        biomeName: BIOME_NAMES.get(state.biome[idx]) ?? 'Ocean',
+        elevation: state.elevation[idx],
+        temperature: state.temperature[idx],
+        moisture: state.moisture[idx],
+        daisyWhite: state.daisyWhite[idx],
+        daisyBlack: state.daisyBlack[idx],
+      };
     },
   };
 })();
@@ -162,10 +253,12 @@ function statusBarHtml() {
         @click=${simulation.toggle}
         aria-pressed=${uiState.isRunning}
         class="px-3 py-1.5 ${
-          uiState.isRunning ? 'bg-emerald-600' : 'bg-amber-600'
-        } hover:bg-emerald-500 text-white rounded font-bold text-xs flex items-center gap-1.5 transition"
+          uiState.isRunning
+            ? 'bg-amber-600 hover:bg-amber-500'
+            : 'bg-emerald-600 hover:bg-emerald-500'
+        } text-white rounded font-bold text-xs flex items-center gap-1.5 transition"
       >
-        <i class="fa-solid fa-play"></i>
+        <i class="fa-solid ${uiState.isRunning ? 'fa-pause' : 'fa-play'}"></i>
         <span> ${uiState.isRunning ? 'PAUSE' : 'RUN'} </span>
       </button>
       <button
@@ -341,7 +434,7 @@ function atmosphericSlidersHtml() {
   `;
 }
 
-function preetsHtml() {
+function presetsHtml() {
   return html`
     <div class="bg-slate-950 p-3 rounded-lg border border-slate-800">
       <h3
@@ -396,17 +489,231 @@ function logBoxHtml() {
         <i class="fa-solid fa-terminal text-[10px]"></i>
       </h3>
       <div
+        ${ref(eventConsoleRef)}
         id="eventConsole"
         class="flex-1 font-mono text-[10px] text-slate-400 overflow-y-auto space-y-1 my-1 pr-1"
       >
-        <p class="text-emerald-400">> Simulation core initialized [128x64].</p>
-        <p class="text-slate-500">> Select a God Tool to alter surface.</p>
+        ${uiState.logs.map(
+          entry =>
+            html`<p class=${LOG_TONE_CLASSES[entry.tone]}>
+              > ${entry.message}
+            </p>`,
+        )}
+      </div>
+    </div>
+  `;
+}
+
+interface GodToolMeta {
+  id: GodTool;
+  label: string;
+  icon: string;
+  iconClass: string;
+  title: string;
+  labelBreakpoint: 'md' | 'lg';
+}
+
+const GOD_TOOLS: readonly GodToolMeta[] = [
+  {
+    id: 'inspect',
+    label: 'Inspect',
+    icon: 'fa-magnifying-glass',
+    iconClass: '',
+    title: 'Inspect Grid Details',
+    labelBreakpoint: 'md',
+  },
+  {
+    id: 'volcano',
+    label: 'Volcano',
+    icon: 'fa-volcano',
+    iconClass: 'text-red-400',
+    title: 'Spawn Volcano & Mountain',
+    labelBreakpoint: 'md',
+  },
+  {
+    id: 'meteor',
+    label: 'Meteor',
+    icon: 'fa-meteor',
+    iconClass: 'text-amber-500',
+    title: 'Trigger Meteor Impact',
+    labelBreakpoint: 'md',
+  },
+  {
+    id: 'raise',
+    label: 'Raise Land',
+    icon: 'fa-mountain',
+    iconClass: 'text-emerald-400',
+    title: 'Raise Land Mass',
+    labelBreakpoint: 'md',
+  },
+  {
+    id: 'lower',
+    label: 'Lower Land',
+    icon: 'fa-water',
+    iconClass: 'text-cyan-400',
+    title: 'Lower Land / Dig Ocean',
+    labelBreakpoint: 'md',
+  },
+  {
+    id: 'daisy_white',
+    label: 'White Daisy',
+    icon: 'fa-sun',
+    iconClass: 'text-slate-100',
+    title: 'Plant White Daisies (High Albedo)',
+    labelBreakpoint: 'lg',
+  },
+  {
+    id: 'daisy_black',
+    label: 'Black Daisy',
+    icon: 'fa-moon',
+    iconClass: 'text-slate-400',
+    title: 'Plant Black Daisies (Low Albedo)',
+    labelBreakpoint: 'lg',
+  },
+  {
+    id: 'nuke',
+    label: 'Heat Blast',
+    icon: 'fa-fire',
+    iconClass: 'text-orange-500',
+    title: 'Thermal Blast',
+    labelBreakpoint: 'lg',
+  },
+];
+
+function godToolsBarHtml() {
+  return html`
+    <div
+      class="bg-slate-900 border-b border-slate-800 px-4 py-2 flex items-center justify-between gap-2 overflow-x-auto z-10 shrink-0"
+    >
+      <div class="flex items-center space-x-1">
+        <span
+          class="text-xs text-slate-400 font-bold uppercase tracking-wider mr-2 hidden sm:inline"
+        >
+          <i class="fa-solid fa-hand-sparkles text-amber-400 mr-1"></i>
+          Interventions:
+        </span>
+        ${GOD_TOOLS.map(tool => {
+          const isSelected = uiState.activeTool === tool.id;
+          const hiddenClass =
+            tool.labelBreakpoint === 'lg'
+              ? 'hidden lg:inline'
+              : 'hidden md:inline';
+          return html`<button
+            type="button"
+            data-tool=${tool.id}
+            title=${tool.title}
+            aria-pressed=${isSelected}
+            @click=${() => (uiState.activeTool = tool.id)}
+            class="btn-tool p-2 rounded ${
+              isSelected
+                ? 'bg-blue-600 text-white hover:bg-blue-500'
+                : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+            } text-xs flex items-center gap-1.5 px-3 transition"
+          >
+            <i
+              class="fa-solid ${tool.icon} ${isSelected ? '' : tool.iconClass}"
+            ></i>
+            <span class=${hiddenClass}>${tool.label}</span>
+          </button>`;
+        })}
+      </div>
+
+      <!-- Global Cataclysm Actions -->
+      <div class="flex items-center space-x-2 shrink-0">
+        <button
+          id="btnTriggerIceAge"
+          type="button"
+          @click=${simulation.triggerIceAge}
+          class="px-2.5 py-1 bg-cyan-950 hover:bg-cyan-900 border border-cyan-700/50 text-cyan-300 rounded text-xs font-mono transition"
+        >
+          <i class="fa-solid fa-snowflake"></i> Freeze
+        </button>
+        <button
+          id="btnTriggerGlobalWarming"
+          type="button"
+          @click=${simulation.triggerGlobalWarming}
+          class="px-2.5 py-1 bg-red-950 hover:bg-red-900 border border-red-700/50 text-red-300 rounded text-xs font-mono transition"
+        >
+          <i class="fa-solid fa-fire-flame-curved"></i> Scorch
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+function getGridCoordsFromEvent(
+  event: MouseEvent,
+): {x: number; y: number} | null {
+  const canvas = worldMapRef.value;
+  if (!canvas) return null;
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return null;
+  const gx = Math.floor(
+    ((event.clientX - rect.left) / rect.width) * GRID_WIDTH,
+  );
+  const gy = Math.floor(
+    ((event.clientY - rect.top) / rect.height) * GRID_HEIGHT,
+  );
+  if (gx < 0 || gx >= GRID_WIDTH || gy < 0 || gy >= GRID_HEIGHT) return null;
+  return {x: gx, y: gy};
+}
+
+function formatDaisyCover(white: number, black: number): string {
+  const hasWhite = white > 0.05;
+  const hasBlack = black > 0.05;
+  if (hasWhite && hasBlack) {
+    return `W:${Math.round(white * 100)}% / B:${Math.round(black * 100)}%`;
+  }
+  if (hasWhite) return `White (${Math.round(white * 100)}%)`;
+  if (hasBlack) return `Black (${Math.round(black * 100)}%)`;
+  return 'None';
+}
+
+function gridTooltipHtml() {
+  const hovered = uiState.hoveredCell;
+  if (!hovered) return html``;
+  const info = simulation.getCellInfo(hovered.x, hovered.y);
+  return html`
+    <div
+      id="gridTooltip"
+      class="absolute top-3 left-3 bg-slate-900/90 border border-slate-700 text-slate-200 text-xs p-2.5 rounded shadow-xl pointer-events-none font-mono z-30"
+    >
+      <div class="font-bold text-blue-400 border-b border-slate-800 pb-1 mb-1">
+        Cell [${hovered.x}, ${hovered.y}]
+      </div>
+      <div class="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px]">
+        <span class="text-slate-400">Biome:</span>
+        <span class="text-emerald-400 font-bold">${info.biomeName}</span>
+        <span class="text-slate-400">Elevation:</span>
+        <span class="text-slate-200">${Math.round(info.elevation)}m</span>
+        <span class="text-slate-400">Temp:</span>
+        <span class="text-amber-400">${info.temperature.toFixed(1)}°C</span>
+        <span class="text-slate-400">Moisture:</span>
+        <span class="text-cyan-400">${Math.round(info.moisture)} cm/yr</span>
+        <span class="text-slate-400">Daisy Cover:</span>
+        <span class="text-purple-300">
+          ${formatDaisyCover(info.daisyWhite, info.daisyBlack)}
+        </span>
       </div>
     </div>
   `;
 }
 
 function worldMapHtml() {
+  function handleMouseMove(event: MouseEvent) {
+    uiState.hoveredCell = getGridCoordsFromEvent(event);
+  }
+
+  function handleMouseOut() {
+    uiState.hoveredCell = null;
+  }
+
+  function handleClick(event: MouseEvent) {
+    const coords = getGridCoordsFromEvent(event);
+    if (!coords) return;
+    simulation.applyTool(coords.x, coords.y);
+  }
+
   return html`
     <div
       class="flex-1 min-h-0 relative flex items-center justify-center p-4 bg-slate-950 overflow-hidden"
@@ -418,8 +725,12 @@ function worldMapHtml() {
           ${ref(worldMapRef)}
           width="128"
           height="64"
-          class="world-map-canvas block h-full w-full"
+          @mousemove=${handleMouseMove}
+          @mouseout=${handleMouseOut}
+          @click=${handleClick}
+          class="world-map-canvas cursor-crosshair block h-full w-full"
         ></canvas>
+        ${gridTooltipHtml()}
       </div>
     </div>
   `;
@@ -641,21 +952,21 @@ function bodyHtml() {
       <aside
         class="w-80 bg-slate-900 border-r border-slate-800 p-4 flex flex-col gap-4 shrink-0 overflow-y-auto"
       >
-        ${layerSwitchHtml()} ${atmosphericSlidersHtml()} ${preetsHtml()}
-        ${logBoxHtml()}       
-        </div>
+        ${layerSwitchHtml()} ${atmosphericSlidersHtml()} ${presetsHtml()}
+        ${logBoxHtml()}
       </aside>
 
       <!-- CENTER VIEWPORT: Canvas Simulation Display & God Tools -->
       <section
         class="flex-1 min-h-0 flex flex-col bg-slate-950 overflow-hidden relative"
       >
-        ${worldMapHtml()}
-        ${dashBoardHtml()}
-    </section>
+        ${godToolsBarHtml()} ${worldMapHtml()} ${dashBoardHtml()}
+      </section>
     </main>
   `;
 }
+
+let lastScrolledLog: EventLogEntry | undefined;
 
 function renderApp() {
   render(bodyHtml(), document.body);
@@ -664,7 +975,16 @@ function renderApp() {
   const context = canvas.getContext('2d');
   if (!context) throw new Error('Could not get the world map canvas context');
   drawMap(context, simulation.mapPixels(uiState.activeLayer));
+
+  const latestLog = uiState.logs[uiState.logs.length - 1];
+  const consoleEl = eventConsoleRef.value;
+  if (consoleEl && latestLog !== lastScrolledLog) {
+    consoleEl.scrollTop = consoleEl.scrollHeight;
+    lastScrolledLog = latestLog;
+  }
 }
 renderApp();
 document.onclick = renderApp;
 document.oninput = renderApp;
+document.onmousemove = renderApp;
+document.onmouseout = renderApp;
