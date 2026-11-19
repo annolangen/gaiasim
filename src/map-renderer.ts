@@ -109,8 +109,7 @@ export function selectOceanSprite(
   frame: number,
 ): HTMLImageElement {
   const depth = seaLevel - elevation;
-  const frameIdx =
-    ((frame % OCEAN_FRAME_COUNT) + OCEAN_FRAME_COUNT) % OCEAN_FRAME_COUNT;
+  const frameIdx = frame % OCEAN_FRAME_COUNT;
   if (depth < 1_200) {
     return sprites.ocean.shallow[frameIdx];
   }
@@ -172,12 +171,10 @@ export function selectCellSprite(
     return sprites.land[selectLandTileIndex(elevation, seaLevel)];
   }
 
-  const biomeSprite = sprites.biomes.get(biomeId);
-  if (biomeSprite) {
-    return biomeSprite;
-  }
-
-  return sprites.land[selectLandTileIndex(elevation, seaLevel)];
+  return (
+    sprites.biomes.get(biomeId) ??
+    sprites.land[selectLandTileIndex(elevation, seaLevel)]
+  );
 }
 
 export function createMapPixels(
