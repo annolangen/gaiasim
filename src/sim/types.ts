@@ -27,6 +27,10 @@ export interface SimulationState {
   daisyWhite: Float32Array;
   /** Black daisy coverage in each cell, from 0 to 1. */
   daisyBlack: Float32Array;
+  /** Eastward wind velocity component (u) in m/s (+east, -west). */
+  windX: Float32Array;
+  /** Southward wind velocity component (v) in m/s (+south, -north). */
+  windY: Float32Array;
   /** Biome IDs from `BIOMES`, stored as unsigned bytes. */
   biome: Uint8Array;
 }

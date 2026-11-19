@@ -63,6 +63,8 @@ export function createSimulationState(): SimulationState {
     moisture: new Float32Array(CELL_COUNT),
     daisyWhite: new Float32Array(CELL_COUNT),
     daisyBlack: new Float32Array(CELL_COUNT),
+    windX: new Float32Array(CELL_COUNT),
+    windY: new Float32Array(CELL_COUNT),
     biome: new Uint8Array(CELL_COUNT),
   };
 }

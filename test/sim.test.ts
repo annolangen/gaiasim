@@ -1,11 +1,16 @@
 import {deepStrictEqual, strictEqual} from 'node:assert';
 import {test} from 'node:test';
 import {
+  clampCamera,
+  computeIsolineSegments,
   createMapPixels,
   selectCellSprite,
   selectDaisySprite,
   selectLandTileIndex,
   selectOceanSprite,
+  viewportToGridCoords,
+  WORLD_PIXEL_HEIGHT,
+  WORLD_PIXEL_WIDTH,
 } from '../src/map-renderer';
 import type {SpriteSheet} from '../src/map-renderer';
 import {
@@ -21,6 +26,7 @@ import {
   generatePlanet,
   getIdx,
   simulationStep,
+  updateWindVectors,
 } from '../src/sim/engine';
 import {createNoise2D} from '../src/sim/noise';
 import type {PlanetType} from '../src/sim/types';
@@ -300,4 +306,42 @@ void test('selectCellSprite maps biomes, ocean depth frames, daisies, and alpine
   strictEqual(selectDaisySprite(sprites, 0.8, 0)?.alt, 'daisy:0');
   strictEqual(selectDaisySprite(sprites, 0, 0.8)?.alt, 'daisy:6');
   strictEqual(selectDaisySprite(sprites, 0.4, 0.4)?.alt, 'daisy:3');
+});
+
+void test('updateWindVectors produces trade winds, westerlies, and polar easterlies', () => {
+  const state = createSimulationState();
+  updateWindVectors(state, 0);
+
+  // Equator (~row 32): Hadley trade winds blow westward (windX < 0)
+  strictEqual(state.windX[getIdx(0, 32)] < 0, true);
+  // Mid-latitude (~row 16, ~45°N): Ferrel westerlies blow eastward (windX > 0)
+  strictEqual(state.windX[getIdx(0, 16)] > 0, true);
+  // Polar (~row 2, ~84°N): Polar easterlies blow westward (windX < 0)
+  strictEqual(state.windX[getIdx(0, 2)] < 0, true);
+});
+
+void test('clampCamera and viewportToGridCoords handle zoom, pan, and longitude wrap', () => {
+  const cam = clampCamera({zoom: 2, panX: -16, panY: 9999});
+  strictEqual(cam.zoom, 2);
+  strictEqual(cam.panX, WORLD_PIXEL_WIDTH - 16);
+  strictEqual(cam.panY, WORLD_PIXEL_HEIGHT / 2);
+
+  // At top-left of this panned camera (normX=0, normY=0), worldX is 2032 (cell x=127), worldY is 512 (cell y=32)
+  deepStrictEqual(viewportToGridCoords(0, 0, cam), {x: 127, y: 32});
+  // Slightly to the right wraps past 2048 back to cell x=0
+  deepStrictEqual(viewportToGridCoords(0.05, 0, cam), {x: 2, y: 32});
+});
+
+void test('computeIsolineSegments generates marching-squares contour segments across a gradient', () => {
+  const field = new Float32Array(GRID_WIDTH * GRID_HEIGHT);
+  for (let y = 0; y < GRID_HEIGHT; y++) {
+    for (let x = 0; x < GRID_WIDTH; x++) {
+      field[getIdx(x, y)] = y;
+    }
+  }
+  const segments = computeIsolineSegments(field, 31.5);
+  // A horizontal contour across all 128 columns produces 128 segments at y = (31.5 + 0.5) * 16 = 512
+  strictEqual(segments.length, GRID_WIDTH);
+  strictEqual(segments[0].y1, 512);
+  strictEqual(segments[0].y2, 512);
 });

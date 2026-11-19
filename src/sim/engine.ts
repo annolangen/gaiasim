@@ -139,6 +139,7 @@ export function simulationStep(
   // The prototype applies a linear 1.2°C change per 100 ppm relative to 350 ppm.
   const co2Effect = ((config.co2Ppm - 350) / 100) * 1.2;
   updateTemperature(state, seaLevel, config.solarLuminosity, co2Effect);
+  updateWindVectors(state, seaLevel);
   updateMoisture(state, seaLevel);
   updateDaisies(state, seaLevel);
 
@@ -188,6 +189,51 @@ function updateTemperature(
       // Ocean temperature relaxes four times slower than land temperature.
       const inertia = isWater ? 0.05 : 0.2;
       state.temperature[idx] += (targetTemp - state.temperature[idx]) * inertia;
+    }
+  }
+}
+
+/**
+ * Compute Hadley (0-30°), Ferrel (30-60°), and Polar (60-90°) circulation cells
+ * with terrain-gradient deflection over land.
+ * +windX is eastward, +windY is southward (increasing grid y).
+ */
+export function updateWindVectors(
+  state: SimulationState,
+  seaLevel: number,
+): void {
+  for (let y = 0; y < GRID_HEIGHT; y++) {
+    const latitudeDeg = 90 - (y / (GRID_HEIGHT - 1)) * 180;
+    const absLat = Math.abs(latitudeDeg);
+    const signLat = latitudeDeg >= 0 ? 1 : -1;
+
+    // Zonal wind (u): Trade winds (<30°, westward), Westerlies (30-60°, eastward), Polar easterlies (>60°, westward)
+    const zonalBase =
+      absLat < 30
+        ? -Math.sin(((30 - absLat) / 30) * Math.PI) * 8
+        : absLat < 60
+          ? Math.sin(((absLat - 30) / 30) * Math.PI) * 8
+          : -Math.sin(((absLat - 60) / 30) * Math.PI) * 7;
+    // Meridional wind (v): equatorward in Hadley (<30°) and Polar (>60°) cells, poleward in Ferrel (30-60°) cell
+    const meridionalBase = Math.sin((absLat * Math.PI) / 30) * 3 * signLat;
+
+    for (let x = 0; x < GRID_WIDTH; x++) {
+      const idx = getIdx(x, y);
+      let u = zonalBase;
+      let v = meridionalBase;
+
+      if (state.elevation[idx] > seaLevel) {
+        const eastElev = Math.max(seaLevel, state.elevation[getIdx(x + 1, y)]);
+        const westElev = Math.max(seaLevel, state.elevation[getIdx(x - 1, y)]);
+        const southElev = Math.max(seaLevel, state.elevation[getIdx(x, y + 1)]);
+        const northElev = Math.max(seaLevel, state.elevation[getIdx(x, y - 1)]);
+        // Orographic barrier deflection away from steep uphill slopes
+        u -= ((eastElev - westElev) / 2_000) * 1.5;
+        v -= ((southElev - northElev) / 2_000) * 1.5;
+      }
+
+      state.windX[idx] = u;
+      state.windY[idx] = v;
     }
   }
 }
@@ -381,11 +427,13 @@ export function classifyBiomes(
   }
 }
 
-/** Kept as a named prototype operation; it only reclassifies existing temperature/moisture. */
+/** Kept as a named prototype operation; it updates wind vectors and reclassifies existing temperature/moisture. */
 export function recalculateClimate(
   state: SimulationState,
   config: SimulationConfig,
 ): void {
+  const seaLevel = BASE_SEA_LEVEL + config.seaLevelOffset;
+  updateWindVectors(state, seaLevel);
   classifyBiomes(state, config);
 }
 

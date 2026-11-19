@@ -3,12 +3,16 @@ import {createRef, ref} from 'lit-html/directives/ref.js';
 import './style.css';
 import '@fortawesome/fontawesome-free/css/all.min.css';
 import {
+  clampCamera,
   createMapPixels,
   loadSprites,
   renderWorldMap,
   TILE_SIZE,
+  viewportToGridCoords,
+  WORLD_PIXEL_HEIGHT,
+  WORLD_PIXEL_WIDTH,
 } from './map-renderer';
-import type {MapLayer, SpriteSheet} from './map-renderer';
+import type {MapCamera, MapLayer, SpriteSheet} from './map-renderer';
 import {
   BIOMES,
   createSimulationConfig,
@@ -52,6 +56,15 @@ const uiState = {
   activeLayer: 'biomes' as MapLayer,
   activeTool: 'inspect' as GodTool,
   activePreset: 'earth' as PlanetType,
+  showIsolines: true,
+  camera: {zoom: 1, panX: 0, panY: 0} as MapCamera,
+  dragState: null as {
+    startX: number;
+    startY: number;
+    startPanX: number;
+    startPanY: number;
+    moved: boolean;
+  } | null,
   hoveredCell: null as {x: number; y: number} | null,
   logs: [
     {message: 'Simulation core initialized [128x64].', tone: 'emerald'},
@@ -173,6 +186,8 @@ const simulation = (() => {
         elevation: state.elevation[idx],
         temperature: state.temperature[idx],
         moisture: state.moisture[idx],
+        windX: state.windX[idx],
+        windY: state.windY[idx],
         daisyWhite: state.daisyWhite[idx],
         daisyBlack: state.daisyBlack[idx],
       };
@@ -299,14 +314,30 @@ function layerButtonHtml(layer: MapLayer, label: string, icon: string) {
 function layerSwitchHtml() {
   return html` <div class="bg-slate-950 p-3 rounded-lg border border-slate-800">
     <h3
-      class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2.5 flex items-center gap-2"
+      class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2.5 flex items-center justify-between"
     >
-      <i class="fa-solid fa-layer-group text-blue-400"></i> Map Display Layer
+      <span class="flex items-center gap-2">
+        <i class="fa-solid fa-layer-group text-blue-400"></i> Map Display Layer
+      </span>
+      <button
+        type="button"
+        aria-pressed=${uiState.showIsolines}
+        @click=${() => (uiState.showIsolines = !uiState.showIsolines)}
+        title="Toggle smoothed temperature & moisture contour isolines"
+        class="px-1.5 py-0.5 rounded text-[10px] font-mono ${
+          uiState.showIsolines
+            ? 'bg-cyan-900/60 text-cyan-300 border border-cyan-600/50'
+            : 'bg-slate-800 text-slate-500'
+        }"
+      >
+        Isolines
+      </button>
     </h3>
     <div class="grid grid-cols-2 gap-2 text-xs">
       ${layerButtonHtml('biomes', 'Biomes/Terrain', 'fa-tree')}
       ${layerButtonHtml('temp', 'Temperature', 'fa-temperature-half')}
       ${layerButtonHtml('moisture', 'Moisture', 'fa-cloud-rain')}
+      ${layerButtonHtml('wind', 'Wind Vectors', 'fa-wind')}
       ${layerButtonHtml('daisies', 'Daisyworld', 'fa-sun-plant-wilt')}
     </div>
   </div>`;
@@ -654,14 +685,34 @@ function getGridCoordsFromEvent(
   if (!canvas) return null;
   const rect = canvas.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return null;
-  const gx = Math.floor(
-    ((event.clientX - rect.left) / rect.width) * GRID_WIDTH,
-  );
-  const gy = Math.floor(
-    ((event.clientY - rect.top) / rect.height) * GRID_HEIGHT,
-  );
-  if (gx < 0 || gx >= GRID_WIDTH || gy < 0 || gy >= GRID_HEIGHT) return null;
-  return {x: gx, y: gy};
+  const normX = (event.clientX - rect.left) / rect.width;
+  const normY = (event.clientY - rect.top) / rect.height;
+  return viewportToGridCoords(normX, normY, uiState.camera);
+}
+
+function zoomAtNormalizedPoint(
+  nextZoom: number,
+  normX = 0.5,
+  normY = 0.5,
+): void {
+  const prev = clampCamera(uiState.camera);
+  const clampedZoom = Math.max(1, Math.min(8, nextZoom));
+  const worldFocusX = prev.panX + normX * (WORLD_PIXEL_WIDTH / prev.zoom);
+  const worldFocusY = prev.panY + normY * (WORLD_PIXEL_HEIGHT / prev.zoom);
+  uiState.camera = clampCamera({
+    zoom: clampedZoom,
+    panX: worldFocusX - normX * (WORLD_PIXEL_WIDTH / clampedZoom),
+    panY: worldFocusY - normY * (WORLD_PIXEL_HEIGHT / clampedZoom),
+  });
+}
+
+function formatWind(windX: number, windY: number): string {
+  const speed = Math.hypot(windX, windY);
+  const dirs = ['E', 'SE', 'S', 'SW', 'W', 'NW', 'N', 'NE'];
+  const angle = Math.atan2(windY, windX);
+  const idx =
+    Math.round(((angle + Math.PI * 2) % (Math.PI * 2)) / (Math.PI / 4)) % 8;
+  return `${speed.toFixed(1)} m/s ${dirs[idx]}`;
 }
 
 function formatDaisyCover(white: number, black: number): string {
@@ -696,6 +747,8 @@ function gridTooltipHtml() {
         <span class="text-amber-400">${info.temperature.toFixed(1)}°C</span>
         <span class="text-slate-400">Moisture:</span>
         <span class="text-cyan-400">${Math.round(info.moisture)} cm/yr</span>
+        <span class="text-slate-400">Wind:</span>
+        <span class="text-sky-300">${formatWind(info.windX, info.windY)}</span>
         <span class="text-slate-400">Daisy Cover:</span>
         <span class="text-purple-300">
           ${formatDaisyCover(info.daisyWhite, info.daisyBlack)}
@@ -705,16 +758,124 @@ function gridTooltipHtml() {
   `;
 }
 
+function viewportControlsHtml() {
+  return html`
+    <div
+      class="absolute bottom-3 right-3 bg-slate-900/90 border border-slate-700 rounded flex items-center gap-1 p-1 text-xs font-mono z-30 shadow-lg"
+    >
+      <button
+        id="btnZoomOut"
+        type="button"
+        title="Zoom Out"
+        @click=${() => zoomAtNormalizedPoint(uiState.camera.zoom / 1.5)}
+        class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded"
+      >
+        <i class="fa-solid fa-minus"></i>
+      </button>
+      <span class="px-1.5 text-blue-400 font-bold">
+        ${uiState.camera.zoom.toFixed(1)}x
+      </span>
+      <button
+        id="btnZoomIn"
+        type="button"
+        title="Zoom In"
+        @click=${() => zoomAtNormalizedPoint(uiState.camera.zoom * 1.5)}
+        class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded"
+      >
+        <i class="fa-solid fa-plus"></i>
+      </button>
+      <button
+        id="btnZoomReset"
+        type="button"
+        title="Reset Zoom & Pan"
+        @click=${() => {
+          uiState.camera = {zoom: 1, panX: 0, panY: 0};
+        }}
+        class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[10px]"
+      >
+        Reset
+      </button>
+    </div>
+  `;
+}
+
 function worldMapHtml() {
+  function handleWheel(event: WheelEvent) {
+    event.preventDefault();
+    const canvas = worldMapRef.value;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const normX = Math.max(
+      0,
+      Math.min(0.999, (event.clientX - rect.left) / rect.width),
+    );
+    const normY = Math.max(
+      0,
+      Math.min(0.999, (event.clientY - rect.top) / rect.height),
+    );
+    const factor = event.deltaY < 0 ? 1.25 : 0.8;
+    zoomAtNormalizedPoint(uiState.camera.zoom * factor, normX, normY);
+    renderApp();
+  }
+
+  function handleMouseDown(event: MouseEvent) {
+    if (event.button !== 0) return;
+    uiState.dragState = {
+      startX: event.clientX,
+      startY: event.clientY,
+      startPanX: uiState.camera.panX,
+      startPanY: uiState.camera.panY,
+      moved: false,
+    };
+  }
+
   function handleMouseMove(event: MouseEvent) {
+    const canvas = worldMapRef.value;
+    if (uiState.dragState && canvas) {
+      const dx = event.clientX - uiState.dragState.startX;
+      const dy = event.clientY - uiState.dragState.startY;
+      if (Math.hypot(dx, dy) > 4) {
+        uiState.dragState.moved = true;
+      }
+      if (uiState.dragState.moved) {
+        const rect = canvas.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          const worldDx =
+            (dx / rect.width) * (WORLD_PIXEL_WIDTH / uiState.camera.zoom);
+          const worldDy =
+            (dy / rect.height) * (WORLD_PIXEL_HEIGHT / uiState.camera.zoom);
+          uiState.camera = clampCamera({
+            zoom: uiState.camera.zoom,
+            panX: uiState.dragState.startPanX - worldDx,
+            panY: uiState.dragState.startPanY - worldDy,
+          });
+        }
+      }
+    }
     uiState.hoveredCell = getGridCoordsFromEvent(event);
+  }
+
+  function handleMouseUp() {
+    if (!uiState.dragState) return;
+    // Defer clearing `moved` until after the click handler fires in the same turn.
+    const wasMoved = uiState.dragState.moved;
+    uiState.dragState = wasMoved ? {...uiState.dragState} : null;
+    window.setTimeout(() => {
+      uiState.dragState = null;
+    }, 0);
   }
 
   function handleMouseOut() {
     uiState.hoveredCell = null;
+    uiState.dragState = null;
   }
 
   function handleClick(event: MouseEvent) {
+    if (uiState.dragState?.moved) {
+      uiState.dragState = null;
+      return;
+    }
     const coords = getGridCoordsFromEvent(event);
     if (!coords) return;
     simulation.applyTool(coords.x, coords.y);
@@ -736,12 +897,15 @@ function worldMapHtml() {
             ${ref(worldMapRef)}
             width=${GRID_WIDTH * TILE_SIZE}
             height=${GRID_HEIGHT * TILE_SIZE}
+            @wheel=${handleWheel}
+            @mousedown=${handleMouseDown}
             @mousemove=${handleMouseMove}
+            @mouseup=${handleMouseUp}
             @mouseout=${handleMouseOut}
             @click=${handleClick}
             class="world-map-canvas cursor-crosshair block h-full w-full"
           ></canvas>
-          ${gridTooltipHtml()}
+          ${gridTooltipHtml()} ${viewportControlsHtml()}
         </div>
       </div>
     </div>
@@ -985,6 +1149,8 @@ function drawWorldCanvas() {
     uiState.activeLayer,
     loadedSprites,
     animationFrame,
+    uiState.camera,
+    uiState.showIsolines,
   );
 }
 
