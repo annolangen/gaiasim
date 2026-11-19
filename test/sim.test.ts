@@ -1,6 +1,13 @@
 import {deepStrictEqual, strictEqual} from 'node:assert';
 import {test} from 'node:test';
-import {createMapPixels} from '../src/map-renderer';
+import {
+  createMapPixels,
+  selectCellSprite,
+  selectDaisySprite,
+  selectLandTileIndex,
+  selectOceanSprite,
+} from '../src/map-renderer';
+import type {SpriteSheet} from '../src/map-renderer';
 import {
   BIOMES,
   createSimulationConfig,
@@ -245,4 +252,52 @@ void test('createMapPixels renders the selected layer as opaque RGBA pixels', ()
     Array.from(createMapPixels(state, config, 'moisture').slice(0, 4)),
     [0, 100, 255, 255],
   );
+});
+
+void test('selectCellSprite maps biomes, ocean depth frames, daisies, and alpine elevation', () => {
+  const fakeImg = (tag: string) => ({alt: tag}) as unknown as HTMLImageElement;
+  const sprites: SpriteSheet = {
+    biomes: new Map(
+      Object.values(BIOMES)
+        .filter((b): b is typeof b & {sprite: string} => 'sprite' in b)
+        .map(b => [b.id, fakeImg(`biome:${b.sprite}`)]),
+    ),
+    ocean: {
+      shallow: Array.from({length: 8}, (_, i) => fakeImg(`shallow:${i}`)),
+      regular: Array.from({length: 8}, (_, i) => fakeImg(`regular:${i}`)),
+      deep: Array.from({length: 8}, (_, i) => fakeImg(`deep:${i}`)),
+    },
+    land: Array.from({length: 32}, (_, i) => fakeImg(`land:${i}`)),
+    daisy: Array.from({length: 7}, (_, i) => fakeImg(`daisy:${i}`)),
+  };
+
+  const state = createSimulationState();
+  const config = createSimulationConfig();
+
+  // Ocean depth tiers and frame wrapping
+  strictEqual(selectOceanSprite(sprites, -500, 0, 3).alt, 'shallow:3');
+  strictEqual(selectOceanSprite(sprites, -2_000, 0, 9).alt, 'regular:1');
+  strictEqual(selectOceanSprite(sprites, -6_000, 0, 2).alt, 'deep:2');
+
+  // Static biome mapping via BIOMES[...].sprite
+  state.elevation[0] = 200;
+  state.biome[0] = BIOMES.FOREST.id;
+  strictEqual(
+    selectCellSprite(sprites, state, config, 0, 'biomes', 0).alt,
+    'biome:forest',
+  );
+
+  // Alpine falls back to elevation-indexed land tiles (16..31)
+  state.biome[0] = BIOMES.ALPINE.id;
+  state.elevation[0] = 6_000;
+  strictEqual(selectLandTileIndex(6_000, 0), 31);
+  strictEqual(
+    selectCellSprite(sprites, state, config, 0, 'biomes', 0).alt,
+    'land:31',
+  );
+
+  // Daisy sprites scale from 0 (white) to 6 (black)
+  strictEqual(selectDaisySprite(sprites, 0.8, 0)?.alt, 'daisy:0');
+  strictEqual(selectDaisySprite(sprites, 0, 0.8)?.alt, 'daisy:6');
+  strictEqual(selectDaisySprite(sprites, 0.4, 0.4)?.alt, 'daisy:3');
 });

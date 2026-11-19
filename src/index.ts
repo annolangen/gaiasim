@@ -2,8 +2,13 @@ import {html, render, svg} from 'lit-html';
 import {createRef, ref} from 'lit-html/directives/ref.js';
 import './style.css';
 import '@fortawesome/fontawesome-free/css/all.min.css';
-import {drawMap, createMapPixels} from './map-renderer';
-import type {MapLayer} from './map-renderer';
+import {
+  createMapPixels,
+  loadSprites,
+  renderWorldMap,
+  TILE_SIZE,
+} from './map-renderer';
+import type {MapLayer, SpriteSheet} from './map-renderer';
 import {
   BIOMES,
   createSimulationConfig,
@@ -115,6 +120,7 @@ const simulation = (() => {
 
   return {
     toggle,
+    state,
     config,
     get metrics() {
       return metrics;
@@ -728,8 +734,8 @@ function worldMapHtml() {
         >
           <canvas
             ${ref(worldMapRef)}
-            width="128"
-            height="64"
+            width=${GRID_WIDTH * TILE_SIZE}
+            height=${GRID_HEIGHT * TILE_SIZE}
             @mousemove=${handleMouseMove}
             @mouseout=${handleMouseOut}
             @click=${handleClick}
@@ -961,15 +967,30 @@ function bodyHtml() {
   `;
 }
 
+const SPRITE_ANIMATION_FPS = 5;
+const SPRITE_ANIMATION_INTERVAL_MS = 1_000 / SPRITE_ANIMATION_FPS;
 let lastScrolledLog: EventLogEntry | undefined;
+let loadedSprites: SpriteSheet | null = null;
+let animationFrame = 0;
 
-function renderApp() {
-  render(bodyHtml(), document.body);
+function drawWorldCanvas() {
   const canvas = worldMapRef.value;
   if (!canvas) throw new Error('World map canvas was not rendered');
   const context = canvas.getContext('2d');
   if (!context) throw new Error('Could not get the world map canvas context');
-  drawMap(context, simulation.mapPixels(uiState.activeLayer));
+  renderWorldMap(
+    context,
+    simulation.state,
+    simulation.config,
+    uiState.activeLayer,
+    loadedSprites,
+    animationFrame,
+  );
+}
+
+function renderApp() {
+  render(bodyHtml(), document.body);
+  drawWorldCanvas();
 
   const latestLog = uiState.logs[uiState.logs.length - 1];
   const consoleEl = eventConsoleRef.value;
@@ -979,6 +1000,14 @@ function renderApp() {
   }
 }
 renderApp();
+void loadSprites().then(sprites => {
+  loadedSprites = sprites;
+  drawWorldCanvas();
+  window.setInterval(() => {
+    animationFrame = (animationFrame + 1) % 8;
+    drawWorldCanvas();
+  }, SPRITE_ANIMATION_INTERVAL_MS);
+});
 document.onclick = renderApp;
 document.oninput = renderApp;
 document.onmousemove = renderApp;

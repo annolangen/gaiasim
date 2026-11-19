@@ -11,18 +11,45 @@ interface BiomeDefinition {
   name: string;
   /** RGB color channels in the 0-to-255 range, for the later renderer. */
   color: readonly [number, number, number];
+  /** Optional static biome sprite stem in `sprites/biomes/<sprite>.png`. */
+  sprite?: string;
 }
 
 /** Biome IDs follow plan.md section 3.A; RGB colors are for the later renderer. */
 export const BIOMES = {
   OCEAN: {id: 0, name: 'Ocean', color: [30, 64, 175]},
-  SEA_ICE: {id: 1, name: 'Sea Ice / Arctic', color: [226, 232, 240]},
-  DESERT: {id: 2, name: 'Desert', color: [217, 119, 6]},
-  GRASSLAND: {id: 3, name: 'Grassland / Steppe', color: [234, 179, 8]},
-  FOREST: {id: 4, name: 'Forest (Deciduous)', color: [34, 197, 94]},
-  JUNGLE: {id: 5, name: 'Jungle (Rainforest)', color: [4, 120, 87]},
-  SWAMP: {id: 6, name: 'Swamp / Marsh', color: [21, 128, 61]},
-  TUNDRA: {id: 7, name: 'Tundra', color: [148, 163, 184]},
+  SEA_ICE: {
+    id: 1,
+    name: 'Sea Ice / Arctic',
+    color: [226, 232, 240],
+    sprite: 'arctic',
+  },
+  DESERT: {id: 2, name: 'Desert', color: [217, 119, 6], sprite: 'desert'},
+  GRASSLAND: {
+    id: 3,
+    name: 'Grassland / Steppe',
+    color: [234, 179, 8],
+    sprite: 'grass',
+  },
+  FOREST: {
+    id: 4,
+    name: 'Forest (Deciduous)',
+    color: [34, 197, 94],
+    sprite: 'forest',
+  },
+  JUNGLE: {
+    id: 5,
+    name: 'Jungle (Rainforest)',
+    color: [4, 120, 87],
+    sprite: 'jungle',
+  },
+  SWAMP: {
+    id: 6,
+    name: 'Swamp / Marsh',
+    color: [21, 128, 61],
+    sprite: 'swamp',
+  },
+  TUNDRA: {id: 7, name: 'Tundra', color: [148, 163, 184], sprite: 'boreal'},
   ALPINE: {id: 8, name: 'Alpine / Rock', color: [100, 116, 139]},
 } as const satisfies Record<string, BiomeDefinition>;
 
