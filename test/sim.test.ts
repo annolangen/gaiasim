@@ -1,6 +1,10 @@
 import {deepStrictEqual, strictEqual} from 'node:assert';
 import {test} from 'node:test';
 import {
+  computePlanetaryAudioParams,
+  sampleViewportWindSpeed,
+} from '../src/audio';
+import {
   clampCamera,
   computeIsolineSegments,
   createMapPixels,
@@ -344,4 +348,86 @@ void test('computeIsolineSegments generates marching-squares contour segments ac
   strictEqual(segments.length, GRID_WIDTH);
   strictEqual(segments[0].y1, 512);
   strictEqual(segments[0].y2, 512);
+});
+
+void test('computePlanetaryAudioParams maps planetary metrics to bounded audio parameters', () => {
+  const coldBarren = computePlanetaryAudioParams({
+    averageTemperatureC: -60,
+    temperatureHistory: [],
+    whiteDaisyHistory: [],
+    blackDaisyHistory: [],
+    oceanCoveragePct: 70,
+    totalBiomassPct: 0,
+    whiteDaisyCoveragePct: 0,
+    blackDaisyCoveragePct: 0,
+  });
+  strictEqual(coldBarren.biomassRatio, 0);
+  strictEqual(coldBarren.padFilterCutoffHz, 400);
+  strictEqual(coldBarren.windFilterHz, 80);
+  strictEqual(coldBarren.windGain, 0.08);
+
+  const lushTemperate = computePlanetaryAudioParams({
+    averageTemperatureC: 15,
+    temperatureHistory: [],
+    whiteDaisyHistory: [],
+    blackDaisyHistory: [],
+    oceanCoveragePct: 50,
+    totalBiomassPct: 50,
+    whiteDaisyCoveragePct: 0,
+    blackDaisyCoveragePct: 0,
+  });
+  strictEqual(lushTemperate.biomassRatio, 1);
+  strictEqual(lushTemperate.padFilterCutoffHz, 1125);
+  strictEqual(lushTemperate.windGain, 0.015);
+  strictEqual(Math.abs(lushTemperate.droneScale - 0.9) < 1e-9, true);
+
+  // Zooming into a windy region swells wind gain, brightens filter frequency, and broadens Q.
+  const calmZoomed = computePlanetaryAudioParams(
+    {
+      averageTemperatureC: 15,
+      temperatureHistory: [],
+      whiteDaisyHistory: [],
+      blackDaisyHistory: [],
+      oceanCoveragePct: 50,
+      totalBiomassPct: 50,
+      whiteDaisyCoveragePct: 0,
+      blackDaisyCoveragePct: 0,
+    },
+    {meanWindSpeedMps: 0, zoom: 8},
+  );
+  const windyZoomed = computePlanetaryAudioParams(
+    {
+      averageTemperatureC: 15,
+      temperatureHistory: [],
+      whiteDaisyHistory: [],
+      blackDaisyHistory: [],
+      oceanCoveragePct: 50,
+      totalBiomassPct: 50,
+      whiteDaisyCoveragePct: 0,
+      blackDaisyCoveragePct: 0,
+    },
+    {meanWindSpeedMps: 8, zoom: 3},
+  );
+  strictEqual(windyZoomed.windGain > 0.7, true);
+  strictEqual(windyZoomed.windGain > calmZoomed.windGain, true);
+  strictEqual(windyZoomed.windFilterHz > calmZoomed.windFilterHz, true);
+  strictEqual(windyZoomed.windFilterQ < calmZoomed.windFilterQ, true);
+});
+
+void test('sampleViewportWindSpeed distinguishes calm doldrums from windy belts when zoomed in', () => {
+  const state = createSimulationState();
+  updateWindVectors(state, 0);
+
+  // Zoom into the Ferrel westerlies (~45°N, row 16 -> y=256px) vs equatorial doldrums (~0°, row 32 -> y=512px)
+  const westerliesWind = sampleViewportWindSpeed(state, {
+    zoom: 8,
+    panX: 0,
+    panY: 16 * 16 - WORLD_PIXEL_HEIGHT / 16,
+  });
+  const doldrumsWind = sampleViewportWindSpeed(state, {
+    zoom: 8,
+    panX: 0,
+    panY: 32 * 16 - WORLD_PIXEL_HEIGHT / 16,
+  });
+  strictEqual(westerliesWind > doldrumsWind * 2, true);
 });

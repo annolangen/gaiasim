@@ -2,6 +2,7 @@ import {html, render, svg} from 'lit-html';
 import {createRef, ref} from 'lit-html/directives/ref.js';
 import './style.css';
 import '@fortawesome/fontawesome-free/css/all.min.css';
+import {PlanetaryAmbientEngine} from './audio';
 import {
   clampCamera,
   createMapPixels,
@@ -85,6 +86,7 @@ function logEvent(message: string, tone: EventLogEntry['tone'] = 'info') {
 const simulation = (() => {
   const state = createSimulationState();
   const config = createSimulationConfig();
+  const ambientAudio = new PlanetaryAmbientEngine();
   let timer: number | undefined;
   let metrics = generatePlanet(state, config, 'earth');
 
@@ -102,12 +104,18 @@ const simulation = (() => {
     }, SIMULATION_TICK_INTERVAL_MS / uiState.speed);
   }
 
+  function syncAudio() {
+    ambientAudio.updateFromSimulation(metrics, state, uiState.camera);
+  }
+
   function toggle() {
     uiState.isRunning = !uiState.isRunning;
     if (uiState.isRunning) {
       start();
+      ambientAudio.start(metrics, state, uiState.camera);
     } else {
       stop();
+      ambientAudio.stop();
     }
   }
   function step() {
@@ -118,6 +126,7 @@ const simulation = (() => {
       metrics.whiteDaisyHistory,
       metrics.blackDaisyHistory,
     );
+    syncAudio();
   }
 
   /** Recompute summary metrics after terrain/sea-level edits without advancing the year or chart history. */
@@ -129,10 +138,12 @@ const simulation = (() => {
       whiteDaisyHistory: metrics.whiteDaisyHistory,
       blackDaisyHistory: metrics.blackDaisyHistory,
     };
+    syncAudio();
   }
 
   return {
     toggle,
+    syncAudio,
     state,
     config,
     get metrics() {
@@ -142,6 +153,7 @@ const simulation = (() => {
     generate(type: PlanetType) {
       uiState.activePreset = type;
       metrics = generatePlanet(state, config, type);
+      syncAudio();
       logEvent(`Planet generated: Presets [${type.toUpperCase()}].`, 'emerald');
     },
     step,
@@ -704,6 +716,7 @@ function zoomAtNormalizedPoint(
     panX: worldFocusX - normX * (WORLD_PIXEL_WIDTH / clampedZoom),
     panY: worldFocusY - normY * (WORLD_PIXEL_HEIGHT / clampedZoom),
   });
+  simulation.syncAudio();
 }
 
 function formatWind(windX: number, windY: number): string {
@@ -802,6 +815,7 @@ function viewportControlsHtml() {
         title="Reset Zoom & Pan"
         @click=${() => {
           uiState.camera = {zoom: 1, panX: 0, panY: 0};
+          simulation.syncAudio();
         }}
         class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[10px]"
       >
@@ -878,6 +892,7 @@ function worldMapHtml() {
             panX: uiState.dragState.startPanX - worldDx,
             panY: uiState.dragState.startPanY - worldDy,
           });
+          simulation.syncAudio();
         }
       }
     }
