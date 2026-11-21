@@ -758,7 +758,21 @@ function gridTooltipHtml() {
   `;
 }
 
+function toggleFullscreen(): void {
+  if (document.fullscreenElement) {
+    void document.exitFullscreen().catch(() => {});
+  } else {
+    void document.documentElement.requestFullscreen().catch(() => {});
+  }
+}
+
 function viewportControlsHtml() {
+  const fullscreenSupported = Boolean(
+    document.fullscreenEnabled &&
+    typeof document.documentElement.requestFullscreen === 'function',
+  );
+  const isFullscreen = Boolean(document.fullscreenElement);
+
   return html`
     <div
       class="absolute bottom-3 right-3 bg-slate-900/90 border border-slate-700 rounded flex items-center gap-1 p-1 text-xs font-mono z-30 shadow-lg"
@@ -776,7 +790,6 @@ function viewportControlsHtml() {
         ${uiState.camera.zoom.toFixed(1)}x
       </span>
       <button
-        id="btnZoomIn"
         type="button"
         title="Zoom In"
         @click=${() => zoomAtNormalizedPoint(uiState.camera.zoom * 1.5)}
@@ -785,7 +798,6 @@ function viewportControlsHtml() {
         <i class="fa-solid fa-plus"></i>
       </button>
       <button
-        id="btnZoomReset"
         type="button"
         title="Reset Zoom & Pan"
         @click=${() => {
@@ -795,6 +807,22 @@ function viewportControlsHtml() {
       >
         Reset
       </button>
+      ${
+        fullscreenSupported
+          ? html`<button
+              type="button"
+              title=${isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+              aria-label=${isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+              aria-pressed=${isFullscreen}
+              @click=${toggleFullscreen}
+              class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded"
+            >
+              <i
+                class="fa-solid ${isFullscreen ? 'fa-compress' : 'fa-expand'}"
+              ></i>
+            </button>`
+          : html``
+      }
     </div>
   `;
 }
@@ -1178,3 +1206,4 @@ document.onclick = renderApp;
 document.oninput = renderApp;
 document.onmousemove = renderApp;
 document.onmouseout = renderApp;
+document.addEventListener('fullscreenchange', renderApp);
