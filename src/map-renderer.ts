@@ -1,4 +1,5 @@
 import {BIOMES, CELL_COUNT, GRID_HEIGHT, GRID_WIDTH} from './sim/constants';
+import type {BiomeId} from './sim/constants';
 import {getIdx} from './sim/engine';
 import type {SimulationConfig, SimulationState} from './sim/types';
 
@@ -57,6 +58,29 @@ function loadImage(src: string): Promise<HTMLImageElement> {
 
 function pad2(n: number): string {
   return String(n).padStart(2, '0');
+}
+
+const BIOME_SPRITE_STEMS = new Map<number, string>(
+  Object.values(BIOMES)
+    .filter((b): b is typeof b & {sprite: string} => 'sprite' in b)
+    .map(({id, sprite}) => [id, sprite]),
+);
+
+const ALPINE_LEGEND_ELEVATION_METERS = 4_500;
+
+/** Return the representative 16x16 sprite URL for a biome in the UI legend. */
+export function getBiomeLegendSpriteUrl(
+  biomeId: BiomeId,
+  baseUrl = './sprites',
+): string {
+  if (biomeId === BIOMES.OCEAN.id) {
+    return `${baseUrl}/ocean/regular/00.png`;
+  }
+  const stem = BIOME_SPRITE_STEMS.get(biomeId);
+  if (stem) {
+    return `${baseUrl}/biomes/${stem}.png`;
+  }
+  return `${baseUrl}/land/${pad2(selectLandTileIndex(ALPINE_LEGEND_ELEVATION_METERS, 0))}.png`;
 }
 
 export async function loadSprites(baseUrl = './sprites'): Promise<SpriteSheet> {

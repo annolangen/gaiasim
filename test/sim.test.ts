@@ -8,6 +8,7 @@ import {
   clampCamera,
   computeIsolineSegments,
   createMapPixels,
+  getBiomeLegendSpriteUrl,
   selectCellSprite,
   selectDaisySprite,
   selectLandTileIndex,
@@ -430,4 +431,23 @@ void test('sampleViewportWindSpeed distinguishes calm doldrums from windy belts 
     panY: 32 * 16 - WORLD_PIXEL_HEIGHT / 16,
   });
   strictEqual(westerliesWind > doldrumsWind * 2, true);
+});
+
+void test('getBiomeLegendSpriteUrl maps ocean, static biomes, and alpine to sprite paths', () => {
+  strictEqual(
+    getBiomeLegendSpriteUrl(BIOMES.OCEAN.id),
+    './sprites/ocean/regular/00.png',
+  );
+  strictEqual(
+    getBiomeLegendSpriteUrl(BIOMES.FOREST.id),
+    './sprites/biomes/forest.png',
+  );
+  strictEqual(
+    getBiomeLegendSpriteUrl(BIOMES.TUNDRA.id),
+    './sprites/biomes/boreal.png',
+  );
+  strictEqual(
+    getBiomeLegendSpriteUrl(BIOMES.ALPINE.id),
+    './sprites/land/28.png',
+  );
 });

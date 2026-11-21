@@ -6,6 +6,7 @@ import {PlanetaryAmbientEngine} from './audio';
 import {
   clampCamera,
   createMapPixels,
+  getBiomeLegendSpriteUrl,
   loadSprites,
   renderWorldMap,
   TILE_SIZE,
@@ -1120,7 +1121,7 @@ function dashBoardHtml() {
         <div class="flex-1 min-h-0 relative">${daisyChartHtml()}</div>
       </div>
 
-      <!-- Biome Legend & Distribution Summary -->
+      <!-- Biome Legend -->
       <div
         class="bg-slate-950 p-2 rounded border border-slate-800 flex flex-col justify-between min-h-0 overflow-y-auto"
       >
@@ -1128,19 +1129,23 @@ function dashBoardHtml() {
           class="text-[11px] text-slate-400 font-bold uppercase mb-1.5 flex items-center justify-between shrink-0"
         >
           <span>
-            <i class="fa-solid fa-palette text-amber-400 mr-1"></i>
-            Biome Color Key
+            <i class="fa-solid fa-map text-amber-400 mr-1"></i>
+            Biome Legend
           </span>
           <span class="text-[10px] text-slate-500 font-mono">128x64 Map</span>
         </div>
-        <div class="grid grid-cols-3 gap-x-2 gap-y-1 text-[10px] font-mono">
+        <div class="grid grid-cols-3 gap-x-2 gap-y-1.5 text-[10px] font-mono">
           ${Object.values(BIOMES).map(
-            ({name, color}) =>
+            ({id, name, color}) =>
               html`<div class="flex items-center space-x-1.5 min-w-0">
-                <span
-                  class="w-3 h-3 rounded-sm inline-block shrink-0"
+                <img
+                  src=${getBiomeLegendSpriteUrl(id)}
+                  alt=""
+                  width="16"
+                  height="16"
+                  class="w-4 h-4 rounded-sm shrink-0 [image-rendering:pixelated]"
                   style="background-color: rgb(${color.join(', ')})"
-                ></span>
+                />
                 <span class="text-slate-400 truncate" title=${name}>
                   ${name}
                 </span>
