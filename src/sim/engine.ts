@@ -497,6 +497,37 @@ export function getLifeHabitatSuitability(
   return SUITABILITY_MULTIPLIERS[def.habitatPreferences[zone]];
 }
 
+const BASE_PLANETARY_ADVANCEMENT_RATE = 0.08;
+const BASE_PLANETARY_SENTIENCE_RATE = 0.004;
+
+/**
+ * Compute the per-cell probability that a cell of `(def, species)` advances to
+ * `species + 1` on a tick. Dividing by `classCellCount` keeps the planetary
+ * expected advancement rate bounded while still rewarding larger populations.
+ */
+export function computeSpeciesAdvancementProb(
+  def: LifeClassDefinition,
+  species: number,
+  classCellCount: number,
+): number {
+  if (species >= MAX_SPECIES_LEVEL || classCellCount <= 0) return 0;
+  const popFactor = Math.min(1, Math.sqrt(classCellCount / 160));
+  if (species === MAX_SPECIES_LEVEL - 1) {
+    return (
+      (BASE_PLANETARY_SENTIENCE_RATE * popFactor * def.sentienceRate) /
+      classCellCount
+    );
+  }
+  const speciesFactor = species <= 8 ? 1.0 : species <= 12 ? 0.65 : 0.35;
+  return (
+    (BASE_PLANETARY_ADVANCEMENT_RATE *
+      popFactor *
+      def.advancementRate *
+      speciesFactor) /
+    classCellCount
+  );
+}
+
 /** Return all child classes reachable by mutation from `(def, species)`. */
 export function getEligibleMutations(
   def: LifeClassDefinition,
@@ -800,16 +831,15 @@ export function updateLife(
         nextPop = Math.min(1, Math.max(0.05, nextPop));
         state.lifePopulation[i] = nextPop;
 
-        // Within-class species Advancement (1..16), scaled by global population size (manual p. 133).
+        // Within-class species Advancement (1..16), planetary-rate normalized (manual pp. 133, 135).
         let nextSpecies = species;
         if (nextPop >= 0.35 && species < MAX_SPECIES_LEVEL) {
-          const popBoost = Math.min(1, classCellCounts[cls] / 120);
-          let advanceProb = 0.015 + 0.045 * popBoost;
-          // Reaching sentience (species 16) is rare (manual p. 135).
-          if (species === MAX_SPECIES_LEVEL - 1) {
-            advanceProb *= 0.15;
-          }
-          if (random() < advanceProb) {
+          const advanceProb = computeSpeciesAdvancementProb(
+            def,
+            species,
+            classCellCounts[cls],
+          );
+          if (advanceProb > 0 && random() < advanceProb) {
             nextSpecies = species + 1;
             state.lifeSpecies[i] = nextSpecies;
           }
@@ -943,6 +973,7 @@ export function calculateMetrics(
   let totalBlackDaisies = 0;
   let inhabitedCount = 0;
   const lifeClassCounts: Record<number, number> = {};
+  const lifeClassMaxSpecies: Record<number, number> = {};
   const lifeClassSampleCoords: Record<number, {x: number; y: number}> = {};
   const seaLevel = BASE_SEA_LEVEL + config.seaLevelOffset;
 
@@ -961,7 +992,10 @@ export function calculateMetrics(
     if (lifeCls !== LIFE_CLASS_NONE && state.lifePopulation[i] >= 0.05) {
       inhabitedCount++;
       lifeClassCounts[lifeCls] = (lifeClassCounts[lifeCls] ?? 0) + 1;
-      if (!lifeClassSampleCoords[lifeCls]) {
+      const sp = Math.max(1, state.lifeSpecies[i]);
+      const prevMax = lifeClassMaxSpecies[lifeCls] ?? 0;
+      if (sp > prevMax) {
+        lifeClassMaxSpecies[lifeCls] = sp;
         lifeClassSampleCoords[lifeCls] = {
           x: i % GRID_WIDTH,
           y: Math.floor(i / GRID_WIDTH),
@@ -986,6 +1020,7 @@ export function calculateMetrics(
     blackDaisyCoveragePct,
     lifeCoveragePct: Math.round((inhabitedCount / CELL_COUNT) * 100),
     lifeClassCounts,
+    lifeClassMaxSpecies,
     lifeClassSampleCoords,
   };
 }

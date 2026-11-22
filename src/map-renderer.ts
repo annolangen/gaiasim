@@ -5,6 +5,7 @@ import {
   GRID_WIDTH,
   LIFE_CLASSES,
   LIFE_CLASSES_BY_ID,
+  MAX_SPECIES_LEVEL,
 } from './sim/constants';
 import type {BiomeId} from './sim/constants';
 import {getIdx} from './sim/engine';
@@ -59,6 +60,40 @@ export interface SpriteSheet {
   >;
   /** Transparent data URLs of frame 0 for rendering crisp lifeform icons in the DOM legend. */
   lifeformIconUrls: ReadonlyMap<number, string>;
+  /** Lazily loaded per-species 2-frame pairs keyed by `lifeformSpeciesKey(classId, species)`. */
+  lifeformSpecies?: Map<
+    number,
+    readonly [CanvasImageSource, CanvasImageSource]
+  >;
+  /** Trigger background loading of `species_2..16` for a class when first rendered. */
+  loadLifeformSpecies?: (classId: number, species: number) => void;
+}
+
+export function lifeformSpeciesKey(classId: number, species: number): number {
+  return classId * 32 + species;
+}
+
+/**
+ * Select the 2-frame animated sprite for `(classId, species)`. Returns the
+ * species-specific sprite if loaded; otherwise triggers lazy loading and falls
+ * back seamlessly to `species_1`.
+ */
+export function selectLifeformSprite(
+  sprites: SpriteSheet,
+  classId: number,
+  species: number,
+  frameIndex: 0 | 1,
+): CanvasImageSource | null {
+  const clampedSpecies = Math.max(1, Math.min(MAX_SPECIES_LEVEL, species || 1));
+  const key = lifeformSpeciesKey(classId, clampedSpecies);
+  const speciesPair = sprites.lifeformSpecies?.get(key);
+  if (speciesPair) return speciesPair[frameIndex];
+
+  if (clampedSpecies > 1) {
+    sprites.loadLifeformSpecies?.(classId, clampedSpecies);
+  }
+  const fallbackPair = sprites.lifeforms.get(classId);
+  return fallbackPair ? fallbackPair[frameIndex] : null;
 }
 
 const LIFEFORM_CHROMA_KEY = [32, 200, 248] as const;
@@ -160,7 +195,10 @@ export function getBiomeLegendSpriteUrl(
   return `${baseUrl}/land/${pad2(selectLandTileIndex(ALPINE_LEGEND_ELEVATION_METERS, 0))}.png`;
 }
 
-export async function loadSprites(baseUrl = './sprites'): Promise<SpriteSheet> {
+export async function loadSprites(
+  baseUrl = './sprites',
+  onSpeciesLoaded?: () => void,
+): Promise<SpriteSheet> {
   const biomeEntries = Object.values(BIOMES).filter(
     (b): b is typeof b & {sprite: string} => 'sprite' in b,
   );
@@ -228,7 +266,13 @@ export async function loadSprites(baseUrl = './sprites'): Promise<SpriteSheet> {
     ]);
 
   const lifeformIconUrls = new Map<number, string>();
-  for (const [id, [frame0]] of lifePairs) {
+  const lifeformSpecies = new Map<
+    number,
+    readonly [CanvasImageSource, CanvasImageSource]
+  >();
+  for (const [id, pair] of lifePairs) {
+    lifeformSpecies.set(lifeformSpeciesKey(id, 1), pair);
+    const [frame0] = pair;
     if (
       typeof HTMLCanvasElement !== 'undefined' &&
       frame0 instanceof HTMLCanvasElement
@@ -242,6 +286,33 @@ export async function loadSprites(baseUrl = './sprites'): Promise<SpriteSheet> {
     }
   }
 
+  const pendingSpecies = new Set<number>();
+  const loadLifeformSpecies = (classId: number, species: number): void => {
+    const clamped = Math.max(1, Math.min(MAX_SPECIES_LEVEL, species));
+    const key = lifeformSpeciesKey(classId, clamped);
+    if (lifeformSpecies.has(key) || pendingSpecies.has(key)) return;
+    const def = LIFE_CLASSES_BY_ID.get(classId);
+    if (!def) return;
+    pendingSpecies.add(key);
+    void Promise.all([
+      loadImage(`${baseUrl}/lifeforms/${def.sprite}/species_${clamped}/0.png`),
+      loadImage(`${baseUrl}/lifeforms/${def.sprite}/species_${clamped}/1.png`),
+    ])
+      .then(([img0, img1]) => {
+        lifeformSpecies.set(key, [
+          keyOutLifeformSprite(img0),
+          keyOutLifeformSprite(img1),
+        ]);
+        onSpeciesLoaded?.();
+      })
+      .catch(() => {
+        // Keep species_1 fallback if a sprite fails to load.
+      })
+      .finally(() => {
+        pendingSpecies.delete(key);
+      });
+  };
+
   return {
     biomes: new Map(biomePairs),
     ocean: {shallow, regular, deep},
@@ -249,6 +320,8 @@ export async function loadSprites(baseUrl = './sprites'): Promise<SpriteSheet> {
     daisy,
     lifeforms: new Map(lifePairs),
     lifeformIconUrls,
+    lifeformSpecies,
+    loadLifeformSpecies,
   };
 }
 
@@ -931,9 +1004,14 @@ function renderWorldPass(
           const lifeCls = state.lifeClass[idx];
           if (lifeCls === 0 || state.lifePopulation[idx] < 0.05) continue;
           if (visibleLifeClasses && !visibleLifeClasses.has(lifeCls)) continue;
-          const pair = sprites.lifeforms.get(lifeCls);
-          if (!pair) continue;
-          const sprite = pair[(lifeFrameBase + ((x + y) & 1)) % 2];
+          const frameIdx = ((lifeFrameBase + ((x + y) & 1)) % 2) as 0 | 1;
+          const sprite = selectLifeformSprite(
+            sprites,
+            lifeCls,
+            state.lifeSpecies[idx],
+            frameIdx,
+          );
+          if (!sprite) continue;
           context.drawImage(
             sprite,
             x * TILE_SIZE,

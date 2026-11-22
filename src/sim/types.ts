@@ -75,6 +75,8 @@ export interface SimulationMetrics {
   lifeCoveragePct: number;
   /** Cell counts keyed by active `LifeClassId`. */
   lifeClassCounts: Record<number, number>;
+  /** Highest species level (`1..16`) currently alive per active `LifeClassId`. */
+  lifeClassMaxSpecies: Record<number, number>;
   /** Representative `(x, y)` grid coordinates keyed by active `LifeClassId`. */
   lifeClassSampleCoords: Record<number, {x: number; y: number}>;
 }

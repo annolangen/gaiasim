@@ -13,10 +13,12 @@ import {
   createMapPixels,
   createPinchAnchor,
   getBiomeLegendSpriteUrl,
+  lifeformSpeciesKey,
   sampleCameraFlight,
   selectCellSprite,
   selectDaisySprite,
   selectLandTileIndex,
+  selectLifeformSprite,
   selectOceanSprite,
   stripLifeformBackgroundPixels,
   viewportToGridCoords,
@@ -38,6 +40,7 @@ import {
 import {
   applyGodTool,
   classifyBiomes,
+  computeSpeciesAdvancementProb,
   generatePlanet,
   getEligibleMutations,
   getIdx,
@@ -378,6 +381,7 @@ void test('computePlanetaryAudioParams maps planetary metrics to bounded audio p
     blackDaisyCoveragePct: 0,
     lifeCoveragePct: 0,
     lifeClassCounts: {},
+    lifeClassMaxSpecies: {},
     lifeClassSampleCoords: {},
   });
   strictEqual(coldBarren.biomassRatio, 0);
@@ -396,6 +400,7 @@ void test('computePlanetaryAudioParams maps planetary metrics to bounded audio p
     blackDaisyCoveragePct: 0,
     lifeCoveragePct: 0,
     lifeClassCounts: {},
+    lifeClassMaxSpecies: {},
     lifeClassSampleCoords: {},
   });
   strictEqual(lushTemperate.biomassRatio, 1);
@@ -416,6 +421,7 @@ void test('computePlanetaryAudioParams maps planetary metrics to bounded audio p
       blackDaisyCoveragePct: 0,
       lifeCoveragePct: 0,
       lifeClassCounts: {},
+      lifeClassMaxSpecies: {},
       lifeClassSampleCoords: {},
     },
     {meanWindSpeedMps: 0, zoom: 8},
@@ -432,6 +438,7 @@ void test('computePlanetaryAudioParams maps planetary metrics to bounded audio p
       blackDaisyCoveragePct: 0,
       lifeCoveragePct: 0,
       lifeClassCounts: {},
+      lifeClassMaxSpecies: {},
       lifeClassSampleCoords: {},
     },
     {meanWindSpeedMps: 8, zoom: 3},
@@ -574,7 +581,7 @@ void test('lifeforms follow Page 141 habitat matrix, species-slot mutations, Euk
   strictEqual(config.o2Pct, 0);
 
   // With low random rolls, Prokaryotes advance to sp. 9+, mutate into Eukaryotes, and oxygenate the ocean
-  const alwaysLow = () => 0.001;
+  const alwaysLow = () => 0.0001;
   for (let i = 0; i < 15; i++) {
     updateLife(state, config, alwaysLow);
   }
@@ -589,6 +596,46 @@ void test('lifeforms follow Page 141 habitat matrix, species-slot mutations, Euk
   strictEqual(state.lifeClass[centerIdx], LIFE_CLASS_NONE);
   strictEqual(state.lifeSpecies[centerIdx], 0);
   strictEqual(state.lifePopulation[centerIdx], 0);
+});
+
+void test('computeSpeciesAdvancementProb normalizes by cell count and gates sentience by class', () => {
+  // Expected planetary advances stay bounded as N grows (does not explode with N)
+  const expectedAt200 =
+    200 * computeSpeciesAdvancementProb(LIFE_CLASSES.MAMMAL, 4, 200);
+  const expectedAt2000 =
+    2000 * computeSpeciesAdvancementProb(LIFE_CLASSES.MAMMAL, 4, 2000);
+  strictEqual(Math.abs(expectedAt200 - expectedAt2000) < 1e-9, true);
+
+  // Larger population still advances faster than tiny pockets (manual p. 133)
+  const expectedAt10 =
+    10 * computeSpeciesAdvancementProb(LIFE_CLASSES.MAMMAL, 4, 10);
+  strictEqual(expectedAt200 > expectedAt10, true);
+
+  // Lower classes cannot reach Sentience (Sp.16) naturally without external help
+  strictEqual(
+    computeSpeciesAdvancementProb(LIFE_CLASSES.PROKARYOTE, 15, 500),
+    0,
+  );
+  strictEqual(computeSpeciesAdvancementProb(LIFE_CLASSES.FISH, 15, 500), 0);
+  strictEqual(
+    computeSpeciesAdvancementProb(LIFE_CLASSES.AMPHIBIAN, 15, 500),
+    0,
+  );
+
+  // Higher sapient candidates have non-zero but rare sentience rates, highest for Mammals
+  const mammalSentience = computeSpeciesAdvancementProb(
+    LIFE_CLASSES.MAMMAL,
+    15,
+    500,
+  );
+  const carnifernSentience = computeSpeciesAdvancementProb(
+    LIFE_CLASSES.CARNIFERN,
+    15,
+    500,
+  );
+  strictEqual(mammalSentience > carnifernSentience, true);
+  strictEqual(carnifernSentience > 0, true);
+  strictEqual(500 * mammalSentience <= 0.005, true);
 });
 
 void test('Carniferns co-evolve from plants with abundant early Insects and starve without Insects', () => {
@@ -712,4 +759,60 @@ void test('createCameraFlight glides shortest wrapped longitude path with a midp
   strictEqual(midCam.zoom < 3, true);
   strictEqual(endCam.zoom, 4);
   deepStrictEqual(viewportToGridCoords(0.5, 0.5, endCam), {x: 58, y: 32});
+});
+
+void test('selectLifeformSprite resolves cached species sprites and triggers lazy load with species_1 fallback', () => {
+  const fakeImg = (tag: string) => ({alt: tag}) as unknown as HTMLImageElement;
+  const loadedRequests: Array<[number, number]> = [];
+  const lifeformSpecies = new Map<
+    number,
+    readonly [CanvasImageSource, CanvasImageSource]
+  >([
+    [
+      lifeformSpeciesKey(LIFE_CLASSES.FISH.id, 7),
+      [fakeImg('fish:7:0'), fakeImg('fish:7:1')],
+    ],
+  ]);
+  const sprites: SpriteSheet = {
+    biomes: new Map(),
+    ocean: {shallow: [], regular: [], deep: []},
+    land: [],
+    daisy: [],
+    lifeforms: new Map([
+      [LIFE_CLASSES.FISH.id, [fakeImg('fish:1:0'), fakeImg('fish:1:1')]],
+    ]),
+    lifeformIconUrls: new Map(),
+    lifeformSpecies,
+    loadLifeformSpecies(classId, species) {
+      loadedRequests.push([classId, species]);
+    },
+  };
+
+  // Cached species 7 resolves directly without triggering a load
+  strictEqual(
+    (
+      selectLifeformSprite(
+        sprites,
+        LIFE_CLASSES.FISH.id,
+        7,
+        1,
+      ) as HTMLImageElement
+    ).alt,
+    'fish:7:1',
+  );
+  strictEqual(loadedRequests.length, 0);
+
+  // Uncached species 12 falls back cleanly to species 1 and queues lazy load
+  strictEqual(
+    (
+      selectLifeformSprite(
+        sprites,
+        LIFE_CLASSES.FISH.id,
+        12,
+        0,
+      ) as HTMLImageElement
+    ).alt,
+    'fish:1:0',
+  );
+  deepStrictEqual(loadedRequests, [[LIFE_CLASSES.FISH.id, 12]]);
 });

@@ -33,6 +33,7 @@ import {
   GRID_WIDTH,
   LIFE_CLASSES,
   LIFE_CLASSES_BY_ID,
+  MAX_SPECIES_LEVEL,
 } from './sim/constants';
 import {
   applyGodTool,
@@ -172,6 +173,7 @@ const simulation = (() => {
   const config = createSimulationConfig();
   const ambientAudio = new PlanetaryAmbientEngine();
   const activeLifeClassCoords = new Map<number, {x: number; y: number}>();
+  const sentientLifeClasses = new Set<number>();
   let timer: number | undefined;
   let metrics = generatePlanet(state, config, 'earth');
   for (const [id, coords] of Object.entries(metrics.lifeClassSampleCoords)) {
@@ -184,19 +186,30 @@ const simulation = (() => {
       nextCoords.set(Number(id), coords);
     }
     for (const [id, coords] of nextCoords) {
-      if (!activeLifeClassCoords.has(id)) {
-        const def = LIFE_CLASSES_BY_ID.get(id);
-        if (def) {
-          logEvent(
-            `Evolution milestone: [${def.name.toUpperCase()}] emerged at (${coords.x}, ${coords.y})!`,
-            'emerald',
-            {coords, autoZoom: true},
-          );
-        }
+      const def = LIFE_CLASSES_BY_ID.get(id);
+      if (!activeLifeClassCoords.has(id) && def) {
+        logEvent(
+          `Evolution milestone: [${def.name.toUpperCase()}] emerged at (${coords.x}, ${coords.y})!`,
+          'emerald',
+          {coords, autoZoom: true},
+        );
+      }
+      if (
+        def &&
+        (metrics.lifeClassMaxSpecies[id] ?? 0) >= MAX_SPECIES_LEVEL &&
+        !sentientLifeClasses.has(id)
+      ) {
+        sentientLifeClasses.add(id);
+        logEvent(
+          `SENTIENCE: [${def.name.toUpperCase()}] reached Species ${MAX_SPECIES_LEVEL} at (${coords.x}, ${coords.y})!`,
+          'cyan',
+          {coords, autoZoom: true},
+        );
       }
     }
     for (const [id, lastCoords] of activeLifeClassCoords) {
       if (!nextCoords.has(id)) {
+        sentientLifeClasses.delete(id);
         const def = LIFE_CLASSES_BY_ID.get(id);
         if (def) {
           logEvent(
@@ -280,6 +293,7 @@ const simulation = (() => {
       uiState.activePreset = type;
       metrics = generatePlanet(state, config, type);
       activeLifeClassCoords.clear();
+      sentientLifeClasses.clear();
       for (const [id, coords] of Object.entries(
         metrics.lifeClassSampleCoords,
       )) {
@@ -1430,10 +1444,11 @@ function layerLegendPanelHtml() {
           ${ALL_LIFE_CLASSES.map(def => {
             const isChecked = uiState.visibleLifeClasses.has(def.id);
             const count = simulation.metrics.lifeClassCounts[def.id] ?? 0;
+            const maxSp = simulation.metrics.lifeClassMaxSpecies[def.id] ?? 0;
             const iconUrl = loadedSprites?.lifeformIconUrls.get(def.id);
             return html`<label
               class="flex items-center gap-1 min-w-0 cursor-pointer hover:bg-slate-900 rounded px-0.5 py-0.5 select-none leading-none"
-              title=${`${def.name}: ${count} cells (min O2: ${def.minO2Pct}%, ${def.minTempC}..${def.maxTempC}°C)`}
+              title=${`${def.name}: ${count} cells${maxSp > 0 ? `, max Sp.${maxSp}` : ''} (min O2: ${def.minO2Pct}%, ${def.minTempC}..${def.maxTempC}°C)`}
             >
               <span
                 class="w-7 text-right text-[9px] tabular-nums shrink-0 ${
@@ -1794,7 +1809,7 @@ function renderApp() {
   }
 }
 renderApp();
-void loadSprites().then(sprites => {
+void loadSprites('./sprites', drawWorldCanvas).then(sprites => {
   loadedSprites = sprites;
   renderApp();
   window.setInterval(() => {
