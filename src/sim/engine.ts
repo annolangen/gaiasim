@@ -1306,17 +1306,49 @@ export function updateLife(
             state.lifePopulation[nIdx],
             0.25,
           );
-        } else if (nClass !== def.id && suit >= 0.6) {
+        } else if (nClass !== def.id) {
           const nDef = LIFE_CLASSES_BY_ID.get(nClass);
-          if (
-            nDef &&
-            lifeAdvancementScore(def, species) >
-              lifeAdvancementScore(nDef, state.lifeSpecies[nIdx]) &&
-            random() < 0.06
-          ) {
-            state.lifeClass[nIdx] = def.id;
-            state.lifeSpecies[nIdx] = species;
-            state.lifePopulation[nIdx] = 0.25;
+          if (!nDef) continue;
+
+          // Cross-habitat mutation into an occupied neighbor of a lower-ranked class
+          // (e.g., coastal Mammal -> Cetacean into an inhabited shelf, Fish -> Amphibian onto insect land).
+          if (prevPop[i] >= 0.45 && children.length > 0) {
+            const eligible = children.filter(
+              child =>
+                child.id !== nDef.id &&
+                child.competitionRank > nDef.competitionRank &&
+                getLifeHabitatSuitability(child, nZone, nTemp, config.o2Pct) >=
+                  0.6,
+            );
+            if (eligible.length > 0 && random() < 0.008) {
+              const chosen = eligible[Math.floor(random() * eligible.length)];
+              state.lifeClass[nIdx] = chosen.id;
+              state.lifeSpecies[nIdx] = 1;
+              state.lifePopulation[nIdx] = 0.25;
+              continue;
+            }
+          }
+
+          if (suit >= 0.6) {
+            const nSuit = getLifeHabitatSuitability(
+              nDef,
+              nZone,
+              nTemp,
+              config.o2Pct,
+            );
+            const hasHabitatAdvantage = suit > nSuit;
+            const hasAdvancementEdge =
+              suit === nSuit &&
+              lifeAdvancementScore(def, species) >
+                lifeAdvancementScore(nDef, state.lifeSpecies[nIdx]);
+            if (
+              (hasHabitatAdvantage || hasAdvancementEdge) &&
+              random() < 0.06
+            ) {
+              state.lifeClass[nIdx] = def.id;
+              state.lifeSpecies[nIdx] = species;
+              state.lifePopulation[nIdx] = 0.25;
+            }
           }
         }
       }
