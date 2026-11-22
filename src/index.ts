@@ -4,20 +4,22 @@ import './style.css';
 import '@fortawesome/fontawesome-free/css/all.min.css';
 import {PlanetaryAmbientEngine} from './audio';
 import {
-  centerCameraOnGridCell,
   clampCamera,
   computePinchCamera,
+  createCameraFlight,
   createMapPixels,
   createPinchAnchor,
   getBiomeLegendSpriteUrl,
   loadSprites,
   renderWorldMap,
+  sampleCameraFlight,
   TILE_SIZE,
   viewportToGridCoords,
   WORLD_PIXEL_HEIGHT,
   WORLD_PIXEL_WIDTH,
 } from './map-renderer';
 import type {
+  EventBeacon,
   MapCamera,
   MapLayer,
   PinchAnchor,
@@ -96,9 +98,59 @@ const SIMULATION_TICK_INTERVAL_MS = 1_000;
 const worldMapRef = createRef<HTMLCanvasElement>();
 const eventConsoleRef = createRef<HTMLDivElement>();
 
+const EVENT_BEACON_DURATION_MS = 2_200;
+let activeCameraFlightRafId: number | null = null;
+let activeEventBeacon: EventBeacon | null = null;
+
+function cancelCameraFlight(): void {
+  if (activeCameraFlightRafId !== null) {
+    window.cancelAnimationFrame(activeCameraFlightRafId);
+    activeCameraFlightRafId = null;
+  }
+  activeEventBeacon = null;
+}
+
 function focusGridCell(x: number, y: number): void {
-  uiState.camera = centerCameraOnGridCell(x, y, EVENT_ZOOM_LEVEL);
-  simulation.syncAudio();
+  cancelCameraFlight();
+  const flight = createCameraFlight(uiState.camera, x, y, EVENT_ZOOM_LEVEL);
+  const startTime = performance.now();
+  let landed = false;
+
+  const stepFrame = (now: number) => {
+    const elapsed = now - startTime;
+    if (elapsed < flight.durationMs) {
+      uiState.camera = sampleCameraFlight(flight, elapsed / flight.durationMs);
+      activeEventBeacon = {x, y, progress: 0};
+      simulation.syncAudio();
+      renderApp();
+      activeCameraFlightRafId = window.requestAnimationFrame(stepFrame);
+      return;
+    }
+
+    if (!landed) {
+      landed = true;
+      uiState.camera = sampleCameraFlight(flight, 1);
+      simulation.syncAudio();
+    }
+
+    const beaconElapsed = elapsed - flight.durationMs;
+    if (beaconElapsed < EVENT_BEACON_DURATION_MS) {
+      activeEventBeacon = {
+        x,
+        y,
+        progress: beaconElapsed / EVENT_BEACON_DURATION_MS,
+      };
+      renderApp();
+      activeCameraFlightRafId = window.requestAnimationFrame(stepFrame);
+      return;
+    }
+
+    activeEventBeacon = null;
+    activeCameraFlightRafId = null;
+    drawWorldCanvas();
+  };
+
+  activeCameraFlightRafId = window.requestAnimationFrame(stepFrame);
 }
 
 function logEvent(
@@ -224,6 +276,7 @@ const simulation = (() => {
     },
     mapPixels: (layer: MapLayer) => createMapPixels(state, config, layer),
     generate(type: PlanetType) {
+      cancelCameraFlight();
       uiState.activePreset = type;
       metrics = generatePlanet(state, config, type);
       activeLifeClassCoords.clear();
@@ -826,6 +879,7 @@ function zoomAtNormalizedPoint(
   normX = 0.5,
   normY = 0.5,
 ): void {
+  cancelCameraFlight();
   const prev = clampCamera(uiState.camera);
   const clampedZoom = Math.max(1, Math.min(8, nextZoom));
   const worldFocusX = prev.panX + normX * (WORLD_PIXEL_WIDTH / prev.zoom);
@@ -955,6 +1009,7 @@ function viewportControlsHtml() {
         type="button"
         title="Reset Zoom & Pan"
         @click=${() => {
+          cancelCameraFlight();
           uiState.camera = {zoom: 1, panX: 0, panY: 0};
           simulation.syncAudio();
         }}
@@ -1014,6 +1069,7 @@ function worldMapHtml() {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     const canvas = worldMapRef.value;
     if (!canvas) return;
+    cancelCameraFlight();
 
     uiState.activePointers.set(event.pointerId, {
       x: event.clientX,
@@ -1719,6 +1775,7 @@ function drawWorldCanvas() {
     uiState.camera,
     uiState.showIsolines,
     uiState.visibleLifeClasses,
+    activeEventBeacon,
   );
 }
 

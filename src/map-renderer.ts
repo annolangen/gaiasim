@@ -445,6 +445,106 @@ export function centerCameraOnGridCell(
   });
 }
 
+export interface CameraFlight {
+  startCenterX: number;
+  startCenterY: number;
+  deltaX: number;
+  deltaY: number;
+  startLogZoom: number;
+  endLogZoom: number;
+  arcDipLogZoom: number;
+  durationMs: number;
+}
+
+export interface EventBeacon {
+  x: number;
+  y: number;
+  /** Normalized fade/expand progress from `0` (arrival) to `1` (gone). */
+  progress: number;
+}
+
+function getCameraCenter(camera: MapCamera): {
+  cx: number;
+  cy: number;
+  zoom: number;
+} {
+  const clamped = clampCamera(camera);
+  return {
+    cx:
+      (clamped.panX + WORLD_PIXEL_WIDTH / (2 * clamped.zoom)) %
+      WORLD_PIXEL_WIDTH,
+    cy: clamped.panY + WORLD_PIXEL_HEIGHT / (2 * clamped.zoom),
+    zoom: clamped.zoom,
+  };
+}
+
+/**
+ * Plan a smooth cylindrical-world `flyTo` camera glide from `fromCamera` to
+ * `(targetGx, targetGy)` at `targetZoom`, using shortest-path longitude wrap
+ * and a distance-scaled midpoint zoom-out arc on long hops.
+ */
+export function createCameraFlight(
+  fromCamera: MapCamera,
+  targetGx: number,
+  targetGy: number,
+  targetZoom: number,
+): CameraFlight {
+  const start = getCameraCenter(fromCamera);
+  const end = getCameraCenter(
+    centerCameraOnGridCell(targetGx, targetGy, targetZoom),
+  );
+
+  let deltaX = end.cx - start.cx;
+  if (deltaX > WORLD_PIXEL_WIDTH / 2) deltaX -= WORLD_PIXEL_WIDTH;
+  if (deltaX < -WORLD_PIXEL_WIDTH / 2) deltaX += WORLD_PIXEL_WIDTH;
+  const deltaY = end.cy - start.cy;
+
+  const distFrac = Math.min(
+    1,
+    Math.hypot(deltaX, deltaY) / (WORLD_PIXEL_WIDTH / 2),
+  );
+  const startLogZoom = Math.log2(start.zoom);
+  const endLogZoom = Math.log2(end.zoom);
+  const midLogZoom = (startLogZoom + endLogZoom) / 2;
+  const arcDipLogZoom =
+    Math.max(0, midLogZoom - Math.log2(1.4)) *
+    Math.max(0, (distFrac - 0.12) / 0.88);
+  const durationMs = Math.round(1_400 + distFrac * 1_400);
+
+  return {
+    startCenterX: start.cx,
+    startCenterY: start.cy,
+    deltaX,
+    deltaY,
+    startLogZoom,
+    endLogZoom,
+    arcDipLogZoom,
+    durationMs,
+  };
+}
+
+/** Sample the camera state along a `CameraFlight` at normalized time `t` in `[0, 1]`. */
+export function sampleCameraFlight(
+  flight: CameraFlight,
+  rawT: number,
+): MapCamera {
+  const t = Math.max(0, Math.min(1, rawT));
+  const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  const arc = 4 * ease * (1 - ease);
+  const logZoom =
+    flight.startLogZoom +
+    (flight.endLogZoom - flight.startLogZoom) * ease -
+    flight.arcDipLogZoom * arc;
+  const zoom = Math.max(1, Math.min(8, Math.pow(2, logZoom)));
+  const cx = flight.startCenterX + flight.deltaX * ease;
+  const cy = flight.startCenterY + flight.deltaY * ease;
+  return clampCamera({
+    zoom,
+    panX: cx - WORLD_PIXEL_WIDTH / (2 * zoom),
+    panY: cy - WORLD_PIXEL_HEIGHT / (2 * zoom),
+  });
+}
+
 export interface PinchAnchor {
   startDistance: number;
   startZoom: number;
@@ -737,6 +837,42 @@ const MOISTURE_ISOLINES = [
   {value: 75, color: 'rgba(56, 189, 248, 0.95)'},
 ] as const;
 
+function drawEventBeacon(
+  context: CanvasRenderingContext2D,
+  beacon: EventBeacon,
+): void {
+  const p = Math.max(0, Math.min(1, beacon.progress));
+  const alpha = 1 - p;
+  if (alpha <= 0.01) return;
+
+  const cx =
+    ((((beacon.x % GRID_WIDTH) + GRID_WIDTH) % GRID_WIDTH) + 0.5) * TILE_SIZE;
+  const cy =
+    (Math.max(0, Math.min(GRID_HEIGHT - 1, beacon.y)) + 0.5) * TILE_SIZE;
+  const radius = TILE_SIZE * (0.65 + p * 1.85);
+
+  context.save();
+  context.strokeStyle = `rgba(52, 211, 153, ${(alpha * 0.95).toFixed(3)})`;
+  context.lineWidth = 2.2;
+  context.beginPath();
+  context.arc(cx, cy, radius, 0, Math.PI * 2);
+  context.stroke();
+
+  // Crisp inner highlight around the target tile during early arrival.
+  const innerAlpha = Math.max(0, 1 - p * 1.4);
+  if (innerAlpha > 0.01) {
+    context.strokeStyle = `rgba(255, 255, 255, ${(innerAlpha * 0.9).toFixed(3)})`;
+    context.lineWidth = 1.25;
+    context.strokeRect(
+      cx - TILE_SIZE * 0.55,
+      cy - TILE_SIZE * 0.55,
+      TILE_SIZE * 1.1,
+      TILE_SIZE * 1.1,
+    );
+  }
+  context.restore();
+}
+
 function renderWorldPass(
   context: CanvasRenderingContext2D,
   state: SimulationState,
@@ -746,6 +882,7 @@ function renderWorldPass(
   frame: number,
   showIsolines: boolean,
   visibleLifeClasses?: ReadonlySet<number>,
+  eventBeacon?: EventBeacon | null,
 ): void {
   if (!sprites) {
     drawScaledPixels(
@@ -820,6 +957,10 @@ function renderWorldPass(
   if (layer === 'wind') {
     drawWindVectors(context, state);
   }
+
+  if (eventBeacon) {
+    drawEventBeacon(context, eventBeacon);
+  }
 }
 
 export function renderWorldMap(
@@ -832,6 +973,7 @@ export function renderWorldMap(
   camera: MapCamera = {zoom: 1, panX: 0, panY: 0},
   showIsolines = true,
   visibleLifeClasses?: ReadonlySet<number>,
+  eventBeacon?: EventBeacon | null,
 ): void {
   const {zoom, panX, panY} = clampCamera(camera);
   context.clearRect(0, 0, context.canvas.width, context.canvas.height);
@@ -848,6 +990,7 @@ export function renderWorldMap(
     frame,
     showIsolines,
     visibleLifeClasses,
+    eventBeacon,
   );
 
   // If horizontal pan wraps across the 180° meridian, draw the wrapped eastern continuation.
@@ -862,6 +1005,7 @@ export function renderWorldMap(
       frame,
       showIsolines,
       visibleLifeClasses,
+      eventBeacon,
     );
   }
   context.restore();

@@ -9,9 +9,11 @@ import {
   clampCamera,
   computeIsolineSegments,
   computePinchCamera,
+  createCameraFlight,
   createMapPixels,
   createPinchAnchor,
   getBiomeLegendSpriteUrl,
+  sampleCameraFlight,
   selectCellSprite,
   selectDaisySprite,
   selectLandTileIndex,
@@ -603,4 +605,23 @@ void test('createMapPixels filters life layer cells using visibleLifeClasses', (
     new Set([LIFE_CLASSES.MAMMAL.id]),
   );
   deepStrictEqual(Array.from(hidden.slice(0, 4)), [15, 23, 42, 255]);
+});
+
+void test('createCameraFlight glides shortest wrapped longitude path with a midpoint zoom-out arc', () => {
+  // Start zoomed at 4x on x=122, fly across the 180° seam to x=4 (only 10 tiles east, not 118 tiles west)
+  const start = centerCameraOnGridCell(122, 32, 4);
+  const shortSeam = createCameraFlight(start, 4, 32, 4);
+  strictEqual(shortSeam.deltaX > 0 && shortSeam.deltaX < 12 * 16, true);
+  deepStrictEqual(
+    viewportToGridCoords(0.5, 0.5, sampleCameraFlight(shortSeam, 1)),
+    {x: 4, y: 32},
+  );
+
+  // Opposite-hemisphere hop while zoomed in dips zoom smoothly at midpoint, then lands at 4x
+  const crossGlobe = createCameraFlight(start, 58, 32, 4);
+  const midCam = sampleCameraFlight(crossGlobe, 0.5);
+  const endCam = sampleCameraFlight(crossGlobe, 1);
+  strictEqual(midCam.zoom < 3, true);
+  strictEqual(endCam.zoom, 4);
+  deepStrictEqual(viewportToGridCoords(0.5, 0.5, endCam), {x: 58, y: 32});
 });
