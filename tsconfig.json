@@ -9,5 +9,5 @@
     "outDir": "build",
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "vite.config.mts"]
+  "include": ["src/**/*.ts", "scripts/**/*.ts", "test/**/*.ts", "vite.config.mts"]
 }

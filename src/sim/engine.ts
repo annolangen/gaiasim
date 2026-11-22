@@ -14,6 +14,7 @@ import {
 } from './constants';
 import type {BiomeId, HabitatZone, LifeClassDefinition} from './constants';
 import {noise2D} from './noise';
+import type {Noise2D} from './noise';
 import type {
   GodTool,
   PlanetType,
@@ -36,7 +37,7 @@ const VOLCANO_UPLIFT_METERS_PER_RADIUS = 1_000;
 const METEOR_DEPTH_METERS_PER_RADIUS = 2_000;
 const GOD_TOOL_ELEVATION_STEP_METERS = 1_000;
 
-type ElevationGenerator = (x: number, y: number) => number;
+type ElevationGenerator = (x: number, y: number, noise: Noise2D) => number;
 
 function clampElevationMeters(elevation: number): number {
   return Math.max(
@@ -46,46 +47,59 @@ function clampElevationMeters(elevation: number): number {
 }
 
 /** Two noise octaves with an equatorial bias form the earth-like continents. */
-function generateEarthElevation(x: number, y: number): number {
+function generateEarthElevation(x: number, y: number, noise: Noise2D): number {
   const nx = x / 15;
   const ny = y / 15;
   const latFactor =
     1 - Math.pow(Math.abs(y - GRID_HEIGHT / 2) / (GRID_HEIGHT / 2), 2) * 0.3;
   return clampElevationMeters(
-    noise2D(nx, ny) * 8_308 * latFactor +
-      noise2D(nx * 2, ny * 2) * 3_462 * latFactor +
+    noise(nx, ny) * 8_308 * latFactor +
+      noise(nx * 2, ny * 2) * 3_462 * latFactor +
       6_923 * latFactor -
       7_615,
   );
 }
 
 /** A single central landmass with noise added to its edge. */
-function generatePangaeaElevation(x: number, y: number): number {
+function generatePangaeaElevation(
+  x: number,
+  y: number,
+  noise: Noise2D,
+): number {
   const distFromCenter = Math.hypot(
     (x - GRID_WIDTH / 2) * 0.6,
     y - GRID_HEIGHT / 2,
   );
   return clampElevationMeters(
-    (1 - distFromCenter / 30) * 12_462 +
-      noise2D(x / 10, y / 10) * 4_154 -
-      7_615,
+    (1 - distFromCenter / 30) * 12_462 + noise(x / 10, y / 10) * 4_154 - 7_615,
   );
 }
 
 /** Broad shallow continental shelves ideal for Cambrian marine diversification. */
-function generateCambrianElevation(x: number, y: number): number {
-  return clampElevationMeters(generateEarthElevation(x, y) * 0.72 - 400);
+function generateCambrianElevation(
+  x: number,
+  y: number,
+  noise: Noise2D,
+): number {
+  return clampElevationMeters(generateEarthElevation(x, y, noise) * 0.72 - 400);
 }
 
 /** Higher-frequency noise produces a fragmented island pattern. */
-const generateArchipelagoElevation = (x: number, y: number): number =>
+const generateArchipelagoElevation = (
+  x: number,
+  y: number,
+  noise: Noise2D,
+): number =>
   clampElevationMeters(
-    noise2D(x / 6, y / 6) * 9_692 + noise2D(x / 2, y / 2) * 2_769 - 7_615,
+    noise(x / 6, y / 6) * 9_692 + noise(x / 2, y / 2) * 2_769 - 7_615,
   );
 
 /** Low-relief surface for Daisyworld; elevations are meters relative to sea level. */
-const generateDaisyworldElevation = (x: number, y: number): number =>
-  clampElevationMeters(noise2D(x / 20, y / 20) * 400 + 200);
+const generateDaisyworldElevation = (
+  x: number,
+  y: number,
+  noise: Noise2D,
+): number => clampElevationMeters(noise(x / 20, y / 20) * 400 + 200);
 
 interface PresetLifeSeed {
   readonly classId: number;
@@ -327,6 +341,7 @@ export function generatePlanet(
   config: SimulationConfig,
   type: PlanetType = 'earth',
   random: () => number = Math.random,
+  noise: Noise2D = noise2D,
 ): SimulationMetrics {
   const preset = PLANET_PRESETS[type];
   config.year = 0;
@@ -346,7 +361,7 @@ export function generatePlanet(
       state.lifeClass[idx] = LIFE_CLASS_NONE;
       state.lifeSpecies[idx] = 0;
       state.lifePopulation[idx] = 0;
-      const elev = generateElevation(x, y);
+      const elev = generateElevation(x, y, noise);
 
       if (type === 'daisyworld' && elev > seaBase) {
         // The second draw is conditional, giving black daisies an 18.75% seed chance.

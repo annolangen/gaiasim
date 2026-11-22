@@ -49,6 +49,14 @@ import {
   updateLife,
   updateWindVectors,
 } from '../src/sim/engine';
+import {
+  createMulberry32,
+  formatEvalReport,
+  runHeadlessTrial,
+  summarizeBernoulli,
+  summarizeEvalTrials,
+  summarizeNumeric,
+} from '../src/sim/eval';
 import {createNoise2D} from '../src/sim/noise';
 import type {PlanetType} from '../src/sim/types';
 
@@ -934,4 +942,48 @@ void test('selectLifeformSprite resolves cached species sprites and triggers laz
     'fish:1:0',
   );
   deepStrictEqual(loadedRequests, [[LIFE_CLASSES.FISH.id, 12]]);
+});
+
+void test('headless eval computes summary statistics, Wilson CIs, and deterministic trial results', () => {
+  // Deterministic PRNG
+  const rngA = createMulberry32(42);
+  const rngB = createMulberry32(42);
+  deepStrictEqual([rngA(), rngA(), rngA()], [rngB(), rngB(), rngB()]);
+
+  // Numeric summary (mean, sample SD, median, quantiles)
+  const num = summarizeNumeric([10, 20, 30, 40], 5);
+  strictEqual(num.n, 4);
+  strictEqual(num.total, 5);
+  strictEqual(num.rate, 0.8);
+  strictEqual(num.mean, 25);
+  strictEqual(num.median, 25);
+  strictEqual(Math.abs((num.stdDev ?? 0) - Math.sqrt(500 / 3)) < 1e-9, true);
+
+  // Bernoulli Wilson 95% CI
+  const bern = summarizeBernoulli(5, 20);
+  strictEqual(bern.probability, 0.25);
+  strictEqual(bern.ciLow > 0.08 && bern.ciLow < 0.25, true);
+  strictEqual(bern.ciHigh > 0.25 && bern.ciHigh < 0.5, true);
+
+  // Headless trial is deterministic for the same seed and formats a report
+  const trialA = runHeadlessTrial({
+    preset: 'archean',
+    seed: 7,
+    maxTicks: 10,
+    varyTerrain: true,
+  });
+  const trialB = runHeadlessTrial({
+    preset: 'archean',
+    seed: 7,
+    maxTicks: 10,
+    varyTerrain: true,
+  });
+  deepStrictEqual(trialA, trialB);
+  strictEqual(trialA.classes[LIFE_CLASSES.PROKARYOTE.id].emergedTick, 0);
+
+  const summary = summarizeEvalTrials('archean', 10, true, 7, [trialA]);
+  const report = formatEvalReport(summary);
+  strictEqual(report.includes('ARCHEAN'), true);
+  strictEqual(report.includes('Experience Milestones'), true);
+  strictEqual(report.includes('Sentience Probability'), true);
 });
