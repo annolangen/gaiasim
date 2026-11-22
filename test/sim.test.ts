@@ -289,6 +289,7 @@ void test('selectCellSprite maps biomes, ocean depth frames, daisies, and alpine
     land: Array.from({length: 32}, (_, i) => fakeImg(`land:${i}`)),
     daisy: Array.from({length: 7}, (_, i) => fakeImg(`daisy:${i}`)),
     lifeforms: new Map(),
+    lifeformIconUrls: new Map(),
   };
 
   const state = createSimulationState();
@@ -573,4 +574,33 @@ void test('centerCameraOnGridCell centers target cell at requested zoom includin
   const wrapped = centerCameraOnGridCell(0, 32, 4);
   strictEqual(wrapped.zoom, 4);
   deepStrictEqual(viewportToGridCoords(0.5, 0.5, wrapped), {x: 0, y: 32});
+});
+
+void test('createMapPixels filters life layer cells using visibleLifeClasses', () => {
+  const state = createSimulationState();
+  const config = createSimulationConfig();
+  state.elevation[0] = -1_000;
+  state.lifeClass[0] = LIFE_CLASSES.FISH.id;
+  state.lifePopulation[0] = 0.8;
+
+  // Included in filter -> renders FISH color
+  const shown = createMapPixels(
+    state,
+    config,
+    'life',
+    new Set([LIFE_CLASSES.FISH.id]),
+  );
+  deepStrictEqual(Array.from(shown.slice(0, 4)), [
+    ...LIFE_CLASSES.FISH.color,
+    255,
+  ]);
+
+  // Excluded from filter -> falls back to ocean backdrop color
+  const hidden = createMapPixels(
+    state,
+    config,
+    'life',
+    new Set([LIFE_CLASSES.MAMMAL.id]),
+  );
+  deepStrictEqual(Array.from(hidden.slice(0, 4)), [15, 23, 42, 255]);
 });

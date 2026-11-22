@@ -29,6 +29,7 @@ import {
   createSimulationState,
   GRID_HEIGHT,
   GRID_WIDTH,
+  LIFE_CLASSES,
   LIFE_CLASSES_BY_ID,
 } from './sim/constants';
 import {
@@ -62,6 +63,7 @@ const BIOME_NAMES = new Map<number, string>(
 
 const MAX_LOG_ENTRIES = 100;
 const EVENT_ZOOM_LEVEL = 4;
+const ALL_LIFE_CLASSES = Object.values(LIFE_CLASSES);
 
 const uiState = {
   isRunning: false,
@@ -71,6 +73,7 @@ const uiState = {
   activePreset: 'earth' as PlanetType,
   showIsolines: true,
   zoomToEvent: false,
+  visibleLifeClasses: new Set<number>(ALL_LIFE_CLASSES.map(def => def.id)),
   camera: {zoom: 1, panX: 0, panY: 0} as MapCamera,
   activePointers: new Map<number, {x: number; y: number}>(),
   dragState: null as {
@@ -1329,6 +1332,301 @@ function daisyChartHtml() {
   );
 }
 
+function toggleAllLifeClasses(): void {
+  if (uiState.visibleLifeClasses.size > ALL_LIFE_CLASSES.length / 2) {
+    uiState.visibleLifeClasses.clear();
+  } else {
+    for (const def of ALL_LIFE_CLASSES) {
+      uiState.visibleLifeClasses.add(def.id);
+    }
+  }
+}
+
+function layerLegendPanelHtml() {
+  if (uiState.activeLayer === 'life') {
+    const moreThanHalfSelected =
+      uiState.visibleLifeClasses.size > ALL_LIFE_CLASSES.length / 2;
+    return html`
+      <div
+        class="bg-slate-950 p-2 rounded border border-slate-800 flex flex-col justify-start min-h-0 overflow-hidden"
+      >
+        <div
+          class="text-[11px] text-slate-400 font-bold uppercase mb-1 flex items-center justify-between gap-2 shrink-0"
+        >
+          <span>
+            <i class="fa-solid fa-dna text-lime-400 mr-1"></i>
+            Life Forms
+          </span>
+          <button
+            type="button"
+            @click=${toggleAllLifeClasses}
+            class="text-[10px] font-mono normal-case font-normal text-blue-400 hover:underline cursor-pointer"
+          >
+            ${moreThanHalfSelected ? 'Deselect all' : 'Select all'}
+          </button>
+        </div>
+        <div
+          class="grid grid-cols-3 gap-x-1.5 gap-y-0.5 text-[10px] font-mono overflow-y-auto"
+        >
+          ${ALL_LIFE_CLASSES.map(def => {
+            const isChecked = uiState.visibleLifeClasses.has(def.id);
+            const count = simulation.metrics.lifeClassCounts[def.id] ?? 0;
+            const iconUrl = loadedSprites?.lifeformIconUrls.get(def.id);
+            return html`<label
+              class="flex items-center gap-1 min-w-0 cursor-pointer hover:bg-slate-900 rounded px-0.5 py-0.5 select-none leading-none"
+              title=${`${def.name}: ${count} cells (min O2: ${def.minO2Pct}%, ${def.minTempC}..${def.maxTempC}°C)`}
+            >
+              <span
+                class="w-7 text-right text-[9px] tabular-nums shrink-0 ${
+                  count > 0 ? 'text-lime-400/90' : 'text-slate-700'
+                }"
+              >
+                ${count > 0 ? count : ''}
+              </span>
+              <input
+                type="checkbox"
+                .checked=${isChecked}
+                @change=${(event: Event) => {
+                  const checked = (event.currentTarget as HTMLInputElement)
+                    .checked;
+                  if (checked) {
+                    uiState.visibleLifeClasses.add(def.id);
+                  } else {
+                    uiState.visibleLifeClasses.delete(def.id);
+                  }
+                }}
+                class="accent-lime-400 cursor-pointer shrink-0"
+              />
+              ${
+                iconUrl
+                  ? html`<img
+                      src=${iconUrl}
+                      alt=""
+                      width="16"
+                      height="16"
+                      class="w-4 h-4 shrink-0 [image-rendering:pixelated] ${
+                        count > 0 ? '' : 'opacity-45'
+                      }"
+                    />`
+                  : html`<span
+                      class="w-3 h-3 rounded-sm inline-block shrink-0"
+                      style="background-color: rgb(${def.color.join(', ')})"
+                    ></span>`
+              }
+              <span
+                class="truncate ${
+                  count > 0 ? 'text-slate-200' : 'text-slate-500'
+                }"
+              >
+                ${def.name}
+              </span>
+            </label>`;
+          })}
+        </div>
+      </div>
+    `;
+  }
+
+  if (uiState.activeLayer === 'temp') {
+    return html`
+      <div
+        class="bg-slate-950 p-2 rounded border border-slate-800 flex flex-col justify-start gap-2 min-h-0 overflow-y-auto"
+      >
+        <div
+          class="text-[11px] text-slate-400 font-bold uppercase flex items-center justify-between shrink-0"
+        >
+          <span>
+            <i class="fa-solid fa-temperature-half text-amber-400 mr-1"></i>
+            Temperature Legend
+          </span>
+          <span class="text-[10px] text-slate-500 font-mono">°C</span>
+        </div>
+        <div class="space-y-1 font-mono text-[10px]">
+          <div
+            class="h-3 w-full rounded"
+            style="background: linear-gradient(to right, rgb(0,0,255), rgb(128,200,128), rgb(255,0,0))"
+          ></div>
+          <div class="flex justify-between text-slate-400">
+            <span>-20°C</span>
+            <span>+10°C</span>
+            <span>+40°C</span>
+          </div>
+        </div>
+        <div class="flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-mono">
+          <span class="flex items-center gap-1 text-slate-400">
+            <span class="w-3 h-0.5 bg-sky-200 inline-block"></span>-10°C
+          </span>
+          <span class="flex items-center gap-1 text-slate-400">
+            <span class="w-3 h-0.5 bg-white inline-block"></span>0°C
+          </span>
+          <span class="flex items-center gap-1 text-slate-400">
+            <span class="w-3 h-0.5 bg-yellow-300 inline-block"></span>15°C
+          </span>
+          <span class="flex items-center gap-1 text-slate-400">
+            <span class="w-3 h-0.5 bg-orange-400 inline-block"></span>25°C
+          </span>
+        </div>
+      </div>
+    `;
+  }
+
+  if (uiState.activeLayer === 'moisture') {
+    return html`
+      <div
+        class="bg-slate-950 p-2 rounded border border-slate-800 flex flex-col justify-start gap-2 min-h-0 overflow-y-auto"
+      >
+        <div
+          class="text-[11px] text-slate-400 font-bold uppercase flex items-center justify-between shrink-0"
+        >
+          <span>
+            <i class="fa-solid fa-cloud-rain text-cyan-400 mr-1"></i>
+            Moisture Legend
+          </span>
+          <span class="text-[10px] text-slate-500 font-mono">cm/yr</span>
+        </div>
+        <div class="space-y-1 font-mono text-[10px]">
+          <div
+            class="h-3 w-full rounded"
+            style="background: linear-gradient(to right, rgb(220,200,0), rgb(110,150,128), rgb(0,100,255))"
+          ></div>
+          <div class="flex justify-between text-slate-400">
+            <span>0 (Arid)</span>
+            <span>50</span>
+            <span>100+ (Wet)</span>
+          </div>
+        </div>
+        <div class="flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-mono">
+          <span class="flex items-center gap-1 text-slate-400">
+            <span class="w-3 h-0.5 bg-yellow-300 inline-block"></span>25
+          </span>
+          <span class="flex items-center gap-1 text-slate-400">
+            <span class="w-3 h-0.5 bg-sky-300 inline-block"></span>50
+          </span>
+          <span class="flex items-center gap-1 text-slate-400">
+            <span class="w-3 h-0.5 bg-sky-400 inline-block"></span>75 cm/yr
+          </span>
+        </div>
+      </div>
+    `;
+  }
+
+  if (uiState.activeLayer === 'wind') {
+    return html`
+      <div
+        class="bg-slate-950 p-2 rounded border border-slate-800 flex flex-col justify-start gap-2 min-h-0 overflow-y-auto"
+      >
+        <div
+          class="text-[11px] text-slate-400 font-bold uppercase flex items-center justify-between shrink-0"
+        >
+          <span>
+            <i class="fa-solid fa-wind text-sky-400 mr-1"></i>
+            Wind Legend
+          </span>
+          <span class="text-[10px] text-slate-500 font-mono">m/s</span>
+        </div>
+        <div class="space-y-1 font-mono text-[10px]">
+          <div
+            class="h-3 w-full rounded"
+            style="background: linear-gradient(to right, rgb(0,80,160), rgb(60,168,208), rgb(120,255,255))"
+          ></div>
+          <div class="flex justify-between text-slate-400">
+            <span>0 (Calm)</span>
+            <span>6 m/s</span>
+            <span>12+ m/s</span>
+          </div>
+        </div>
+        <div class="text-[10px] font-mono text-slate-400 leading-snug">
+          0–30° Trade Winds · 30–60° Westerlies · 60–90° Polar Easterlies
+        </div>
+      </div>
+    `;
+  }
+
+  if (uiState.activeLayer === 'daisies') {
+    return html`
+      <div
+        class="bg-slate-950 p-2 rounded border border-slate-800 flex flex-col justify-start gap-2 min-h-0 overflow-y-auto"
+      >
+        <div
+          class="text-[11px] text-slate-400 font-bold uppercase flex items-center justify-between shrink-0"
+        >
+          <span>
+            <i class="fa-solid fa-sun-plant-wilt text-purple-400 mr-1"></i>
+            Daisyworld Legend
+          </span>
+          <span class="text-[10px] text-slate-500 font-mono">Albedo</span>
+        </div>
+        <div class="space-y-1.5 text-[10px] font-mono text-slate-300">
+          <div class="flex items-center gap-2">
+            <img
+              src="./sprites/daisy/00.png"
+              alt=""
+              width="16"
+              height="16"
+              class="w-4 h-4 rounded-sm shrink-0 [image-rendering:pixelated]"
+            />
+            <span>White Daisies (High Albedo — cools)</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <img
+              src="./sprites/daisy/03.png"
+              alt=""
+              width="16"
+              height="16"
+              class="w-4 h-4 rounded-sm shrink-0 [image-rendering:pixelated]"
+            />
+            <span>Mixed Colony</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <img
+              src="./sprites/daisy/06.png"
+              alt=""
+              width="16"
+              height="16"
+              class="w-4 h-4 rounded-sm shrink-0 [image-rendering:pixelated]"
+            />
+            <span>Black Daisies (Low Albedo — warms)</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  return html`
+    <div
+      class="bg-slate-950 p-2 rounded border border-slate-800 flex flex-col justify-start min-h-0 overflow-y-auto"
+    >
+      <div
+        class="text-[11px] text-slate-400 font-bold uppercase mb-1.5 flex items-center justify-between shrink-0"
+      >
+        <span>
+          <i class="fa-solid fa-map text-amber-400 mr-1"></i>
+          Biome Legend
+        </span>
+        <span class="text-[10px] text-slate-500 font-mono">128x64 Map</span>
+      </div>
+      <div class="grid grid-cols-3 gap-x-2 gap-y-1.5 text-[10px] font-mono">
+        ${Object.values(BIOMES).map(
+          ({id, name, color}) =>
+            html`<div class="flex items-center space-x-1.5 min-w-0">
+              <img
+                src=${getBiomeLegendSpriteUrl(id)}
+                alt=""
+                width="16"
+                height="16"
+                class="w-4 h-4 rounded-sm shrink-0 [image-rendering:pixelated]"
+                style="background-color: rgb(${color.join(', ')})"
+              />
+              <span class="text-slate-400 truncate" title=${name}>
+                ${name}
+              </span>
+            </div>`,
+        )}
+      </div>
+    </div>
+  `;
+}
+
 function dashBoardHtml() {
   return html`
     <div
@@ -1371,38 +1669,8 @@ function dashBoardHtml() {
         <div class="flex-1 min-h-0 relative">${daisyChartHtml()}</div>
       </div>
 
-      <!-- Biome Legend -->
-      <div
-        class="bg-slate-950 p-2 rounded border border-slate-800 flex flex-col justify-start min-h-0 overflow-y-auto"
-      >
-        <div
-          class="text-[11px] text-slate-400 font-bold uppercase mb-1.5 flex items-center justify-between shrink-0"
-        >
-          <span>
-            <i class="fa-solid fa-map text-amber-400 mr-1"></i>
-            Biome Legend
-          </span>
-          <span class="text-[10px] text-slate-500 font-mono">128x64 Map</span>
-        </div>
-        <div class="grid grid-cols-3 gap-x-2 gap-y-1.5 text-[10px] font-mono">
-          ${Object.values(BIOMES).map(
-            ({id, name, color}) =>
-              html`<div class="flex items-center space-x-1.5 min-w-0">
-                <img
-                  src=${getBiomeLegendSpriteUrl(id)}
-                  alt=""
-                  width="16"
-                  height="16"
-                  class="w-4 h-4 rounded-sm shrink-0 [image-rendering:pixelated]"
-                  style="background-color: rgb(${color.join(', ')})"
-                />
-                <span class="text-slate-400 truncate" title=${name}>
-                  ${name}
-                </span>
-              </div>`,
-          )}
-        </div>
-      </div>
+      <!-- Active Layer Legend / Controls -->
+      ${layerLegendPanelHtml()}
     </div>
   `;
 }
@@ -1450,6 +1718,7 @@ function drawWorldCanvas() {
     animationFrame,
     uiState.camera,
     uiState.showIsolines,
+    uiState.visibleLifeClasses,
   );
 }
 
@@ -1467,13 +1736,14 @@ function renderApp() {
 renderApp();
 void loadSprites().then(sprites => {
   loadedSprites = sprites;
-  drawWorldCanvas();
+  renderApp();
   window.setInterval(() => {
     animationFrame = (animationFrame + 1) % 8;
     drawWorldCanvas();
   }, SPRITE_ANIMATION_INTERVAL_MS);
 });
 document.onclick = renderApp;
+document.onchange = renderApp;
 document.oninput = renderApp;
 document.onmousemove = renderApp;
 document.onmouseout = renderApp;

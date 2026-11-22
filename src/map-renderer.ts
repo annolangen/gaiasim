@@ -57,6 +57,8 @@ export interface SpriteSheet {
     number,
     readonly [CanvasImageSource, CanvasImageSource]
   >;
+  /** Transparent data URLs of frame 0 for rendering crisp lifeform icons in the DOM legend. */
+  lifeformIconUrls: ReadonlyMap<number, string>;
 }
 
 const LIFEFORM_CHROMA_KEY = [32, 200, 248] as const;
@@ -225,12 +227,28 @@ export async function loadSprites(baseUrl = './sprites'): Promise<SpriteSheet> {
       ),
     ]);
 
+  const lifeformIconUrls = new Map<number, string>();
+  for (const [id, [frame0]] of lifePairs) {
+    if (
+      typeof HTMLCanvasElement !== 'undefined' &&
+      frame0 instanceof HTMLCanvasElement
+    ) {
+      lifeformIconUrls.set(id, frame0.toDataURL());
+    } else if (
+      typeof HTMLImageElement !== 'undefined' &&
+      frame0 instanceof HTMLImageElement
+    ) {
+      lifeformIconUrls.set(id, frame0.src);
+    }
+  }
+
   return {
     biomes: new Map(biomePairs),
     ocean: {shallow, regular, deep},
     land,
     daisy,
     lifeforms: new Map(lifePairs),
+    lifeformIconUrls,
   };
 }
 
@@ -326,6 +344,7 @@ export function createMapPixels(
   state: SimulationState,
   config: SimulationConfig,
   layer: MapLayer,
+  visibleLifeClasses?: ReadonlySet<number>,
 ): Uint8ClampedArray {
   const pixels = new Uint8ClampedArray(CELL_COUNT * 4);
   const paintByLayer: Record<MapLayer, (index: number) => RgbColor> = {
@@ -374,8 +393,13 @@ export function createMapPixels(
       ];
     },
     life: index => {
-      const def = LIFE_CLASSES_BY_ID.get(state.lifeClass[index]);
-      if (def && state.lifePopulation[index] >= 0.05) {
+      const lifeCls = state.lifeClass[index];
+      const def = LIFE_CLASSES_BY_ID.get(lifeCls);
+      if (
+        def &&
+        state.lifePopulation[index] >= 0.05 &&
+        (!visibleLifeClasses || visibleLifeClasses.has(lifeCls))
+      ) {
         return def.color;
       }
       return state.elevation[index] <= config.seaLevelOffset
@@ -721,9 +745,13 @@ function renderWorldPass(
   sprites: SpriteSheet | null,
   frame: number,
   showIsolines: boolean,
+  visibleLifeClasses?: ReadonlySet<number>,
 ): void {
   if (!sprites) {
-    drawScaledPixels(context, createMapPixels(state, config, layer));
+    drawScaledPixels(
+      context,
+      createMapPixels(state, config, layer, visibleLifeClasses),
+    );
   } else {
     const tileLayer = layer === 'daisies' ? 'daisies' : 'biomes';
     context.imageSmoothingEnabled = false;
@@ -765,6 +793,7 @@ function renderWorldPass(
           const idx = y * GRID_WIDTH + x;
           const lifeCls = state.lifeClass[idx];
           if (lifeCls === 0 || state.lifePopulation[idx] < 0.05) continue;
+          if (visibleLifeClasses && !visibleLifeClasses.has(lifeCls)) continue;
           const pair = sprites.lifeforms.get(lifeCls);
           if (!pair) continue;
           const sprite = pair[(lifeFrameBase + ((x + y) & 1)) % 2];
@@ -802,6 +831,7 @@ export function renderWorldMap(
   frame = 0,
   camera: MapCamera = {zoom: 1, panX: 0, panY: 0},
   showIsolines = true,
+  visibleLifeClasses?: ReadonlySet<number>,
 ): void {
   const {zoom, panX, panY} = clampCamera(camera);
   context.clearRect(0, 0, context.canvas.width, context.canvas.height);
@@ -809,7 +839,16 @@ export function renderWorldMap(
   context.save();
   context.scale(zoom, zoom);
   context.translate(-panX, -panY);
-  renderWorldPass(context, state, config, layer, sprites, frame, showIsolines);
+  renderWorldPass(
+    context,
+    state,
+    config,
+    layer,
+    sprites,
+    frame,
+    showIsolines,
+    visibleLifeClasses,
+  );
 
   // If horizontal pan wraps across the 180° meridian, draw the wrapped eastern continuation.
   if (panX + WORLD_PIXEL_WIDTH / zoom > WORLD_PIXEL_WIDTH) {
@@ -822,6 +861,7 @@ export function renderWorldMap(
       sprites,
       frame,
       showIsolines,
+      visibleLifeClasses,
     );
   }
   context.restore();
