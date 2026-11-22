@@ -3,12 +3,14 @@ import {
   CELL_COUNT,
   GRID_HEIGHT,
   GRID_WIDTH,
-  LIFE_CLASS_CHILDREN,
   LIFE_CLASS_NONE,
   LIFE_CLASSES,
   LIFE_CLASSES_BY_ID,
+  MAX_SPECIES_LEVEL,
+  resolveHabitatZone,
+  SUITABILITY_MULTIPLIERS,
 } from './constants';
-import type {BiomeId, LifeClassDefinition} from './constants';
+import type {BiomeId, HabitatZone, LifeClassDefinition} from './constants';
 import {noise2D} from './noise';
 import type {
   GodTool,
@@ -113,6 +115,7 @@ export function generatePlanet(
       state.daisyWhite[idx] = 0;
       state.daisyBlack[idx] = 0;
       state.lifeClass[idx] = LIFE_CLASS_NONE;
+      state.lifeSpecies[idx] = 0;
       state.lifePopulation[idx] = 0;
       const elev = generateElevation(x, y);
 
@@ -131,22 +134,33 @@ export function generatePlanet(
 
   recalculateClimate(state, config);
 
-  // Seed primordial prokaryote pockets in equatorial oceans on non-Daisyworld planets.
+  // Seed primordial prokaryote pockets in equatorial ocean/deep-sea cells (manual p. 133).
   if (type !== 'daisyworld') {
-    const candidates: number[] = [];
+    const deepCandidates: number[] = [];
+    const fallbackCandidates: number[] = [];
     for (let y = 20; y <= 44; y++) {
       for (let x = 0; x < GRID_WIDTH; x++) {
         const idx = getIdx(x, y);
-        if (state.biome[idx] === BIOMES.OCEAN.id) {
-          candidates.push(idx);
+        const zone = resolveHabitatZone(
+          state.biome[idx],
+          state.elevation[idx],
+          seaBase,
+        );
+        if (zone === 'ocean' || zone === 'deep_sea') {
+          deepCandidates.push(idx);
+        } else if (zone === 'shelf') {
+          fallbackCandidates.push(idx);
         }
       }
     }
+    const candidates =
+      deepCandidates.length > 0 ? deepCandidates : fallbackCandidates;
     const seedCount = Math.min(3, candidates.length);
     for (let s = 0; s < seedCount; s++) {
       const pick = Math.floor(random() * candidates.length);
       const idx = candidates[pick];
       state.lifeClass[idx] = LIFE_CLASSES.PROKARYOTE.id;
+      state.lifeSpecies[idx] = 1;
       state.lifePopulation[idx] = 0.5;
     }
   }
@@ -471,115 +485,383 @@ export function recalculateClimate(
   classifyBiomes(state, config);
 }
 
-/** Return habitat suitability (`1.0` primary, `0.5` secondary, `0` uninhabitable). */
+/** Return habitat suitability (`0`, `0.25`, `0.6`, or `1.0`) from the Page 141 chart + O₂/temp gates. */
 export function getLifeHabitatSuitability(
   def: LifeClassDefinition,
-  biomeId: number,
+  zone: HabitatZone,
   temperatureC: number,
   o2Pct: number,
 ): number {
   if (o2Pct < def.minO2Pct) return 0;
   if (temperatureC < def.minTempC || temperatureC > def.maxTempC) return 0;
-  if (def.primaryBiomes.includes(biomeId as BiomeId)) return 1.0;
-  if (def.secondaryBiomes.includes(biomeId as BiomeId)) return 0.5;
-  return 0;
+  return SUITABILITY_MULTIPLIERS[def.habitatPreferences[zone]];
+}
+
+/** Return all child classes reachable by mutation from `(def, species)`. */
+export function getEligibleMutations(
+  def: LifeClassDefinition,
+  species: number,
+): LifeClassDefinition[] {
+  const result: LifeClassDefinition[] = [];
+  for (const mutation of def.mutations) {
+    if (species >= mutation.minSpecies && species <= mutation.maxSpecies) {
+      const child = LIFE_CLASSES_BY_ID.get(mutation.toClassId);
+      if (child) result.push(child);
+    }
+  }
+  return result;
+}
+
+function isVegetatedLandZone(zone: HabitatZone): boolean {
+  return (
+    zone === 'boreal' ||
+    zone === 'desert' ||
+    zone === 'grass' ||
+    zone === 'forest' ||
+    zone === 'jungle' ||
+    zone === 'swamp'
+  );
+}
+
+function lifeAdvancementScore(
+  def: LifeClassDefinition,
+  species: number,
+): number {
+  return def.competitionRank * 20 + species;
+}
+
+interface NeighborhoodTrophicSummary {
+  marineProducerPop: number;
+  fishPreyPop: number;
+  cetaceanPreyPop: number;
+  insectPop: number;
+  earlyInsectCells: number;
+}
+
+function sampleNeighborhoodTrophic(
+  prevClass: Uint8Array,
+  prevSpecies: Uint8Array,
+  prevPop: Float32Array,
+  cx: number,
+  cy: number,
+): NeighborhoodTrophicSummary {
+  let marineProducerPop = 0;
+  let fishPreyPop = 0;
+  let cetaceanPreyPop = 0;
+  let insectPop = 0;
+  let earlyInsectCells = 0;
+
+  for (let dy = -2; dy <= 2; dy++) {
+    const ny = cy + dy;
+    if (ny < 0 || ny >= GRID_HEIGHT) continue;
+    for (let dx = -2; dx <= 2; dx++) {
+      const nIdx = getIdx(cx + dx, ny);
+      const cls = prevClass[nIdx];
+      if (cls === LIFE_CLASS_NONE) continue;
+      const pop = prevPop[nIdx];
+      if (pop < 0.05) continue;
+
+      if (
+        cls === LIFE_CLASSES.PROKARYOTE.id ||
+        cls === LIFE_CLASSES.EUKARYOTE.id
+      ) {
+        marineProducerPop += pop;
+        fishPreyPop += pop;
+      } else if (
+        cls === LIFE_CLASSES.RADIATE.id ||
+        cls === LIFE_CLASSES.ARTHROPOD.id ||
+        cls === LIFE_CLASSES.MOLLUSK.id
+      ) {
+        fishPreyPop += pop;
+        if (cls !== LIFE_CLASSES.RADIATE.id) {
+          cetaceanPreyPop += pop;
+        }
+      } else if (cls === LIFE_CLASSES.FISH.id) {
+        cetaceanPreyPop += pop;
+      } else if (cls === LIFE_CLASSES.INSECT.id) {
+        insectPop += pop;
+        const sp = prevSpecies[nIdx];
+        if (sp >= 1 && sp <= 4) {
+          earlyInsectCells++;
+        }
+      }
+    }
+  }
+
+  return {
+    marineProducerPop,
+    fishPreyPop,
+    cetaceanPreyPop,
+    insectPop,
+    earlyInsectCells,
+  };
 }
 
 /**
- * Advance per-cell lifeform growth, migration, O₂-gated evolution, and
- * photosynthesis/respiration atmospheric O₂ coupling.
+ * Advance per-cell lifeform growth, species advancement (`1..16`), slot-gated
+ * multi-parent mutation, Carnifern co-evolution, trophic food-chain carrying
+ * capacity, competition, and Eukaryote/plant O₂ photosynthesis.
  */
 export function updateLife(
   state: SimulationState,
   config: SimulationConfig,
   random: () => number = Math.random,
 ): void {
+  const seaLevel = BASE_SEA_LEVEL + config.seaLevelOffset;
   const prevClass = new Uint8Array(state.lifeClass);
+  const prevSpecies = new Uint8Array(state.lifeSpecies);
   const prevPop = new Float32Array(state.lifePopulation);
 
-  let prokaryotePopSum = 0;
-  let animalPopSum = 0;
+  // Precompute habitat zones and global class cell counts once per tick.
+  const zones: HabitatZone[] = new Array<HabitatZone>(CELL_COUNT);
+  const classCellCounts = new Int32Array(16);
   let plantBiomeCount = 0;
 
-  // Pass 1: growth, decline, extinction, and in-place evolution.
   for (let i = 0; i < CELL_COUNT; i++) {
-    const biome = state.biome[i];
-    if (biome >= BIOMES.GRASSLAND.id && biome <= BIOMES.SWAMP.id) {
+    const zone = resolveHabitatZone(
+      state.biome[i],
+      state.elevation[i],
+      seaLevel,
+    );
+    zones[i] = zone;
+    if (
+      zone === 'boreal' ||
+      zone === 'grass' ||
+      zone === 'forest' ||
+      zone === 'jungle' ||
+      zone === 'swamp'
+    ) {
       plantBiomeCount++;
     }
-
     const cls = prevClass[i];
-    if (cls === LIFE_CLASS_NONE) continue;
-    const def = LIFE_CLASSES_BY_ID.get(cls);
-    if (!def) continue;
+    if (cls !== LIFE_CLASS_NONE && prevPop[i] >= 0.05) {
+      classCellCounts[cls]++;
+    }
+  }
 
-    const pop = prevPop[i];
-    const suit = getLifeHabitatSuitability(
-      def,
-      biome,
-      state.temperature[i],
-      config.o2Pct,
-    );
+  const globalMarineProducerFrac =
+    (classCellCounts[LIFE_CLASSES.PROKARYOTE.id] +
+      classCellCounts[LIFE_CLASSES.EUKARYOTE.id]) /
+    CELL_COUNT;
+  const globalMarinePreyFrac =
+    globalMarineProducerFrac +
+    (classCellCounts[LIFE_CLASSES.RADIATE.id] +
+      classCellCounts[LIFE_CLASSES.ARTHROPOD.id] +
+      classCellCounts[LIFE_CLASSES.MOLLUSK.id]) /
+      CELL_COUNT;
+  const globalCetaceanPreyFrac =
+    (classCellCounts[LIFE_CLASSES.ARTHROPOD.id] +
+      classCellCounts[LIFE_CLASSES.MOLLUSK.id] +
+      classCellCounts[LIFE_CLASSES.FISH.id]) /
+    CELL_COUNT;
 
-    if (suit > 0) {
-      let nextPop =
-        pop <= suit
-          ? Math.min(
-              suit,
-              pop +
-                0.18 * suit * pop * Math.max(0, 1 - pop / suit) +
-                0.04 * suit,
-            )
-          : pop + (suit - pop) * 0.15;
-      nextPop = Math.min(1, Math.max(0.05, nextPop));
-      state.lifePopulation[i] = nextPop;
+  let eukaryotePopSum = 0;
+  let animalPopSum = 0;
 
-      // In-place evolution into an eligible descendant class.
-      if (nextPop >= 0.45) {
-        const children = LIFE_CLASS_CHILDREN.get(def.id);
-        if (children && children.length > 0) {
-          const eligible = children.filter(
-            child =>
-              getLifeHabitatSuitability(
-                child,
-                biome,
-                state.temperature[i],
-                config.o2Pct,
-              ) > 0,
+  // Pass 1: trophic growth/decline, species advancement, in-place mutation, & Carnifern co-evolution.
+  for (let y = 0; y < GRID_HEIGHT; y++) {
+    for (let x = 0; x < GRID_WIDTH; x++) {
+      const i = y * GRID_WIDTH + x;
+      const zone = zones[i];
+      const temp = state.temperature[i];
+      const cls = prevClass[i];
+
+      if (cls === LIFE_CLASS_NONE) {
+        // Carnifern co-evolution from vegetated land plants in the presence of Insects 1–4.
+        if (
+          isVegetatedLandZone(zone) &&
+          classCellCounts[LIFE_CLASSES.INSECT.id] >= 2 &&
+          getLifeHabitatSuitability(
+            LIFE_CLASSES.CARNIFERN,
+            zone,
+            temp,
+            config.o2Pct,
+          ) > 0
+        ) {
+          const trophic = sampleNeighborhoodTrophic(
+            prevClass,
+            prevSpecies,
+            prevPop,
+            x,
+            y,
           );
-          if (eligible.length > 0 && random() < 0.008) {
-            const chosen = eligible[Math.floor(random() * eligible.length)];
-            state.lifeClass[i] = chosen.id;
-            state.lifePopulation[i] = Math.max(0.3, nextPop * 0.6);
+          if (trophic.earlyInsectCells >= 2 && random() < 0.012) {
+            state.lifeClass[i] = LIFE_CLASSES.CARNIFERN.id;
+            state.lifeSpecies[i] = 1;
+            state.lifePopulation[i] = 0.3;
           }
+        }
+        continue;
+      }
+
+      const def = LIFE_CLASSES_BY_ID.get(cls);
+      if (!def) continue;
+
+      const pop = prevPop[i];
+      const species = Math.max(1, prevSpecies[i]);
+      const baseSuit = getLifeHabitatSuitability(def, zone, temp, config.o2Pct);
+
+      // Compute trophic food-chain factor for consumers and Carniferns.
+      let effectiveCapacity = baseSuit;
+      if (baseSuit > 0) {
+        if (def.trophicTier === 2) {
+          if (zone === 'shelf' || zone === 'ocean' || zone === 'deep_sea') {
+            const trophic = sampleNeighborhoodTrophic(
+              prevClass,
+              prevSpecies,
+              prevPop,
+              x,
+              y,
+            );
+            const food = Math.min(
+              1,
+              0.35 +
+                trophic.marineProducerPop * 0.25 +
+                globalMarineProducerFrac * 2.0,
+            );
+            effectiveCapacity = baseSuit * food;
+          }
+        } else if (def.trophicTier === 3) {
+          if (
+            cls === LIFE_CLASSES.AMPHIBIAN.id ||
+            cls === LIFE_CLASSES.REPTILE.id ||
+            cls === LIFE_CLASSES.AVIAN.id
+          ) {
+            const trophic = sampleNeighborhoodTrophic(
+              prevClass,
+              prevSpecies,
+              prevPop,
+              x,
+              y,
+            );
+            const insectBonus = Math.min(1, trophic.insectPop * 0.5);
+            effectiveCapacity = baseSuit * (0.8 + 0.2 * insectBonus);
+          }
+        } else if (def.trophicTier === 4) {
+          if (cls === LIFE_CLASSES.FISH.id) {
+            const trophic = sampleNeighborhoodTrophic(
+              prevClass,
+              prevSpecies,
+              prevPop,
+              x,
+              y,
+            );
+            const food = Math.min(
+              1,
+              0.35 + trophic.fishPreyPop * 0.25 + globalMarinePreyFrac * 2.5,
+            );
+            effectiveCapacity = baseSuit * food;
+          } else if (
+            cls === LIFE_CLASSES.CETACEAN.id &&
+            (zone === 'shelf' || zone === 'ocean')
+          ) {
+            const trophic = sampleNeighborhoodTrophic(
+              prevClass,
+              prevSpecies,
+              prevPop,
+              x,
+              y,
+            );
+            const food = Math.min(
+              1,
+              0.35 +
+                trophic.cetaceanPreyPop * 0.25 +
+                globalCetaceanPreyFrac * 2.5,
+            );
+            effectiveCapacity = baseSuit * food;
+          }
+        } else if (def.trophicTier === 5) {
+          // Carniferns strictly depend on nearby Insect prey (manual pp. 139, 141).
+          const trophic = sampleNeighborhoodTrophic(
+            prevClass,
+            prevSpecies,
+            prevPop,
+            x,
+            y,
+          );
+          const food = Math.min(1, trophic.insectPop * 0.6);
+          effectiveCapacity = Math.min(1, baseSuit + 0.55) * food;
         }
       }
 
-      if (cls === LIFE_CLASSES.PROKARYOTE.id) {
-        prokaryotePopSum += nextPop;
-      } else if (cls >= LIFE_CLASSES.RADIATE.id) {
-        animalPopSum += nextPop;
-      }
-    } else {
-      const nextPop = pop - 0.25;
-      if (nextPop < 0.05) {
-        state.lifeClass[i] = LIFE_CLASS_NONE;
-        state.lifePopulation[i] = 0;
-      } else {
+      if (effectiveCapacity > 0.05) {
+        let nextPop =
+          pop <= effectiveCapacity
+            ? Math.min(
+                effectiveCapacity,
+                pop +
+                  0.18 *
+                    effectiveCapacity *
+                    pop *
+                    Math.max(0, 1 - pop / effectiveCapacity) +
+                  0.04 * effectiveCapacity,
+              )
+            : pop + (effectiveCapacity - pop) * 0.18;
+        nextPop = Math.min(1, Math.max(0.05, nextPop));
         state.lifePopulation[i] = nextPop;
+
+        // Within-class species Advancement (1..16), scaled by global population size (manual p. 133).
+        let nextSpecies = species;
+        if (nextPop >= 0.35 && species < MAX_SPECIES_LEVEL) {
+          const popBoost = Math.min(1, classCellCounts[cls] / 120);
+          let advanceProb = 0.015 + 0.045 * popBoost;
+          // Reaching sentience (species 16) is rare (manual p. 135).
+          if (species === MAX_SPECIES_LEVEL - 1) {
+            advanceProb *= 0.15;
+          }
+          if (random() < advanceProb) {
+            nextSpecies = species + 1;
+            state.lifeSpecies[i] = nextSpecies;
+          }
+        }
+
+        // Slot-gated in-place Mutation into an eligible child class (spawns at species 1).
+        if (nextPop >= 0.4) {
+          const children = getEligibleMutations(def, nextSpecies);
+          if (children.length > 0) {
+            const eligible = children.filter(
+              child =>
+                getLifeHabitatSuitability(child, zone, temp, config.o2Pct) > 0,
+            );
+            const mutationProb =
+              def.domain === 'sea' && zone === 'shelf' ? 0.025 : 0.008;
+            if (eligible.length > 0 && random() < mutationProb) {
+              const chosen = eligible[Math.floor(random() * eligible.length)];
+              state.lifeClass[i] = chosen.id;
+              state.lifeSpecies[i] = 1;
+              state.lifePopulation[i] = Math.max(0.3, nextPop * 0.6);
+            }
+          }
+        }
+
+        if (cls === LIFE_CLASSES.EUKARYOTE.id) {
+          eukaryotePopSum += nextPop;
+        } else if (cls >= LIFE_CLASSES.RADIATE.id) {
+          animalPopSum += nextPop;
+        }
+      } else {
+        const nextPop = pop - 0.25;
+        if (nextPop < 0.05) {
+          state.lifeClass[i] = LIFE_CLASS_NONE;
+          state.lifeSpecies[i] = 0;
+          state.lifePopulation[i] = 0;
+        } else {
+          state.lifePopulation[i] = nextPop;
+        }
       }
     }
   }
 
-  // Pass 2: migration into adjacent cells and cross-biome transition evolution.
+  // Pass 2: migration, neighbor-colonization mutation, and competition (manual p. 134).
   for (let y = 0; y < GRID_HEIGHT; y++) {
     for (let x = 0; x < GRID_WIDTH; x++) {
-      const i = getIdx(x, y);
+      const i = y * GRID_WIDTH + x;
       const cls = prevClass[i];
       if (cls === LIFE_CLASS_NONE || prevPop[i] < 0.25) continue;
       const def = LIFE_CLASSES_BY_ID.get(cls);
       if (!def) continue;
-      const children = LIFE_CLASS_CHILDREN.get(def.id);
+      const species = Math.max(1, prevSpecies[i]);
+      const children = getEligibleMutations(def, species);
 
       const neighbors = [
         getIdx(x - 1, y),
@@ -589,49 +871,55 @@ export function updateLife(
       ];
       for (const nIdx of neighbors) {
         const nClass = state.lifeClass[nIdx];
-        const nBiome = state.biome[nIdx];
+        const nZone = zones[nIdx];
         const nTemp = state.temperature[nIdx];
-        const suit = getLifeHabitatSuitability(
-          def,
-          nBiome,
-          nTemp,
-          config.o2Pct,
-        );
+        const suit = getLifeHabitatSuitability(def, nZone, nTemp, config.o2Pct);
 
         if (nClass === LIFE_CLASS_NONE) {
-          // Allow coastal/neighbor evolution (e.g., Fish -> Amphibian, Mammal -> Cetacean).
-          if (prevPop[i] >= 0.5 && children && children.length > 0) {
+          // Cross-habitat mutation into empty neighbor (e.g., Arthropod -> Insect, Fish -> Amphibian, Mammal <-> Cetacean).
+          if (prevPop[i] >= 0.45 && children.length > 0) {
             const eligible = children.filter(
               child =>
-                getLifeHabitatSuitability(child, nBiome, nTemp, config.o2Pct) >
+                getLifeHabitatSuitability(child, nZone, nTemp, config.o2Pct) >
                 0,
             );
-            if (eligible.length > 0 && random() < 0.015) {
+            const crossProb = nZone === 'shelf' ? 0.025 : 0.015;
+            if (eligible.length > 0 && random() < crossProb) {
               const chosen = eligible[Math.floor(random() * eligible.length)];
               state.lifeClass[nIdx] = chosen.id;
+              state.lifeSpecies[nIdx] = 1;
               state.lifePopulation[nIdx] = 0.25;
               continue;
             }
           }
           if (suit > 0 && random() < 0.18 * suit) {
             state.lifeClass[nIdx] = def.id;
+            state.lifeSpecies[nIdx] = species;
             state.lifePopulation[nIdx] = 0.2;
           }
-        } else if (nClass < def.id && suit === 1.0 && random() < 0.06) {
-          // Derived clades gradually expand into their primary niche.
-          state.lifeClass[nIdx] = def.id;
-          state.lifePopulation[nIdx] = 0.25;
+        } else if (nClass !== def.id && suit >= 0.6) {
+          const nDef = LIFE_CLASSES_BY_ID.get(nClass);
+          if (
+            nDef &&
+            lifeAdvancementScore(def, species) >
+              lifeAdvancementScore(nDef, state.lifeSpecies[nIdx]) &&
+            random() < 0.06
+          ) {
+            state.lifeClass[nIdx] = def.id;
+            state.lifeSpecies[nIdx] = species;
+            state.lifePopulation[nIdx] = 0.25;
+          }
         }
       }
     }
   }
 
-  // Pass 3: Photosynthesis O₂ generation & respiration coupling.
-  const prokaryoteFrac = prokaryotePopSum / CELL_COUNT;
+  // Pass 3: Eukaryote & land plant biome photosynthesis O₂ coupling (manual p. 136).
+  const eukaryoteFrac = eukaryotePopSum / CELL_COUNT;
   const plantFrac = plantBiomeCount / CELL_COUNT;
   const animalFrac = animalPopSum / CELL_COUNT;
   const o2Production =
-    (prokaryoteFrac * 1.4 + plantFrac * 0.25) * config.solarLuminosity;
+    (eukaryoteFrac * 1.4 + plantFrac * 0.25) * config.solarLuminosity;
   const o2Consumption = animalFrac * 0.15;
   const oxidationSink = config.o2Pct > 21 ? (config.o2Pct - 21) * 0.02 : 0;
   config.o2Pct = Math.max(
@@ -723,11 +1011,13 @@ export function applyGodTool(
       if (dist > radius) continue;
 
       const idx = getIdx(gx + dx, gy + dy);
+      const seaLevel = BASE_SEA_LEVEL + config.seaLevelOffset;
       if (tool === 'volcano') {
         state.elevation[idx] +=
           (radius - dist) * VOLCANO_UPLIFT_METERS_PER_RADIUS;
         state.temperature[idx] += 15;
         state.lifeClass[idx] = LIFE_CLASS_NONE;
+        state.lifeSpecies[idx] = 0;
         state.lifePopulation[idx] = 0;
       } else if (tool === 'meteor') {
         state.elevation[idx] = Math.max(
@@ -737,6 +1027,7 @@ export function applyGodTool(
         );
         state.temperature[idx] += 30;
         state.lifeClass[idx] = LIFE_CLASS_NONE;
+        state.lifeSpecies[idx] = 0;
         state.lifePopulation[idx] = 0;
       } else if (tool === 'raise') {
         state.elevation[idx] = Math.min(
@@ -749,30 +1040,37 @@ export function applyGodTool(
           state.elevation[idx] - GOD_TOOL_ELEVATION_STEP_METERS,
         );
       } else if (tool === 'daisy_white') {
-        if (state.elevation[idx] > BASE_SEA_LEVEL + config.seaLevelOffset) {
+        if (state.elevation[idx] > seaLevel) {
           state.daisyWhite[idx] = 0.8;
           state.daisyBlack[idx] = 0;
         }
       } else if (tool === 'daisy_black') {
-        if (state.elevation[idx] > BASE_SEA_LEVEL + config.seaLevelOffset) {
+        if (state.elevation[idx] > seaLevel) {
           state.daisyBlack[idx] = 0.8;
           state.daisyWhite[idx] = 0;
         }
       } else if (tool === 'seed_life') {
+        const zone = resolveHabitatZone(
+          state.biome[idx],
+          state.elevation[idx],
+          seaLevel,
+        );
         if (
           getLifeHabitatSuitability(
             LIFE_CLASSES.PROKARYOTE,
-            state.biome[idx],
+            zone,
             state.temperature[idx],
             config.o2Pct,
           ) > 0
         ) {
           state.lifeClass[idx] = LIFE_CLASSES.PROKARYOTE.id;
+          state.lifeSpecies[idx] = Math.max(1, state.lifeSpecies[idx]);
           state.lifePopulation[idx] = Math.max(state.lifePopulation[idx], 0.7);
         }
       } else if (tool === 'nuke') {
         state.temperature[idx] += 40;
         state.lifeClass[idx] = LIFE_CLASS_NONE;
+        state.lifeSpecies[idx] = 0;
         state.lifePopulation[idx] = 0;
       }
     }

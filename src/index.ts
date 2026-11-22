@@ -338,6 +338,7 @@ const simulation = (() => {
         daisyBlack: state.daisyBlack[idx],
         lifeClassName:
           lifeDef && state.lifePopulation[idx] >= 0.05 ? lifeDef.name : null,
+        lifeSpecies: state.lifeSpecies[idx],
         lifePopulation: state.lifePopulation[idx],
       };
     },
@@ -943,7 +944,9 @@ function gridTooltipHtml() {
         <span class="text-lime-300">
           ${
             info.lifeClassName
-              ? `${info.lifeClassName} (${Math.round(info.lifePopulation * 100)}%)`
+              ? `${info.lifeClassName} Sp.${info.lifeSpecies} (${Math.round(
+                  info.lifePopulation * 100,
+                )}%)`
               : 'None'
           }
         </span>

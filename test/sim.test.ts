@@ -26,17 +26,20 @@ import {
 import type {SpriteSheet} from '../src/map-renderer';
 import {
   BIOMES,
+  canPlaceLifeClassManually,
   createSimulationConfig,
   createSimulationState,
   GRID_HEIGHT,
   GRID_WIDTH,
   LIFE_CLASS_NONE,
   LIFE_CLASSES,
+  resolveHabitatZone,
 } from '../src/sim/constants';
 import {
   applyGodTool,
   classifyBiomes,
   generatePlanet,
+  getEligibleMutations,
   getIdx,
   getLifeHabitatSuitability,
   simulationStep,
@@ -492,57 +495,142 @@ void test('createPinchAnchor and computePinchCamera zoom and pan around the pinc
   deepStrictEqual(viewportToGridCoords(0.75, 0.5, panned), {x: 64, y: 32});
 });
 
-void test('lifeforms enforce O2/habitat suitability, photosynthesize O2, spread, evolve, and respond to God Tools', () => {
-  // Suitability checks
+void test('lifeforms follow Page 141 habitat matrix, species-slot mutations, Eukaryote O2, and Carnifern food-chain rules', () => {
+  // 15 classes total; Carnifern is not manually placeable
+  strictEqual(Object.values(LIFE_CLASSES).length, 15);
+  strictEqual(canPlaceLifeClassManually(LIFE_CLASSES.CARNIFERN), false);
+  strictEqual(canPlaceLifeClassManually(LIFE_CLASSES.INSECT), true);
+
+  // Water depth tiers and Page 141 suitability
+  strictEqual(resolveHabitatZone(BIOMES.OCEAN.id, -500, 0), 'shelf');
+  strictEqual(resolveHabitatZone(BIOMES.OCEAN.id, -1_800, 0), 'ocean');
+  strictEqual(resolveHabitatZone(BIOMES.OCEAN.id, -4_000, 0), 'deep_sea');
   strictEqual(
-    getLifeHabitatSuitability(LIFE_CLASSES.PROKARYOTE, BIOMES.OCEAN.id, 20, 0),
+    getLifeHabitatSuitability(LIFE_CLASSES.PROKARYOTE, 'deep_sea', 20, 0),
     1.0,
   );
   strictEqual(
-    getLifeHabitatSuitability(LIFE_CLASSES.EUKARYOTE, BIOMES.OCEAN.id, 20, 0.5),
+    getLifeHabitatSuitability(LIFE_CLASSES.PROKARYOTE, 'swamp', 20, 21),
     0,
   );
   strictEqual(
-    getLifeHabitatSuitability(LIFE_CLASSES.EUKARYOTE, BIOMES.OCEAN.id, 20, 1.5),
-    1.0,
+    getLifeHabitatSuitability(LIFE_CLASSES.ARTHROPOD, 'deep_sea', 20, 21),
+    0,
   );
   strictEqual(
-    getLifeHabitatSuitability(LIFE_CLASSES.AMPHIBIAN, BIOMES.OCEAN.id, 20, 12),
-    0.5,
+    getLifeHabitatSuitability(LIFE_CLASSES.CETACEAN, 'jungle', 25, 21),
+    0.6,
+  );
+  strictEqual(
+    getLifeHabitatSuitability(LIFE_CLASSES.AMPHIBIAN, 'desert', 25, 21),
+    0,
+  );
+  strictEqual(
+    getLifeHabitatSuitability(LIFE_CLASSES.AMPHIBIAN, 'shelf', 20, 21),
+    1.0,
+  );
+  // Rock and Arctic are uninhabitable for all 15 classes (manual p. 141)
+  for (const def of Object.values(LIFE_CLASSES)) {
+    strictEqual(getLifeHabitatSuitability(def, 'rock', 15, 21), 0);
+    strictEqual(getLifeHabitatSuitability(def, 'arctic', -5, 21), 0);
+  }
+
+  // Species-slot mutation gates and multi-parent links (manual pp. 136-140)
+  deepStrictEqual(getEligibleMutations(LIFE_CLASSES.PROKARYOTE, 8), []);
+  deepStrictEqual(
+    getEligibleMutations(LIFE_CLASSES.PROKARYOTE, 9).map(d => d.id),
+    [LIFE_CLASSES.EUKARYOTE.id],
+  );
+  deepStrictEqual(
+    getEligibleMutations(LIFE_CLASSES.CETACEAN, 14).map(d => d.id),
+    [LIFE_CLASSES.MAMMAL.id],
+  );
+  deepStrictEqual(
+    getEligibleMutations(LIFE_CLASSES.DINOSAUR, 6).map(d => d.id),
+    [LIFE_CLASSES.MAMMAL.id],
+  );
+  deepStrictEqual(
+    getEligibleMutations(LIFE_CLASSES.FISH, 10).map(d => d.id),
+    [LIFE_CLASSES.TRICHORDATE.id],
   );
 
-  // Photosynthesis raises O2 from 0% and enables prokaryote -> eukaryote evolution
+  // Prokaryotes advance species 1->9, mutate to Eukaryotes on anoxic ocean, and Eukaryotes raise O2
   const state = createSimulationState();
   const config = createSimulationConfig();
   config.o2Pct = 0;
-  state.elevation.fill(-2_000);
+  state.elevation.fill(-500); // shallow shelf
   state.temperature.fill(20);
   state.biome.fill(BIOMES.OCEAN.id);
 
-  // Seed prokaryotes via God Tool in the middle of the ocean
   applyGodTool(state, config, 'seed_life', 64, 32);
   const centerIdx = getIdx(64, 32);
   strictEqual(state.lifeClass[centerIdx], LIFE_CLASSES.PROKARYOTE.id);
+  strictEqual(state.lifeSpecies[centerIdx], 1);
   strictEqual(Math.abs(state.lifePopulation[centerIdx] - 0.7) < 1e-6, true);
 
-  // Deterministic low random source triggers spread and evolution once O2 >= 1%
+  // Anaerobic Prokaryotes do not produce O2 before Eukaryotes emerge
+  const neverAdvance = () => 0.99;
+  updateLife(state, config, neverAdvance);
+  strictEqual(config.o2Pct, 0);
+
+  // With low random rolls, Prokaryotes advance to sp. 9+, mutate into Eukaryotes, and oxygenate the ocean
   const alwaysLow = () => 0.001;
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 15; i++) {
     updateLife(state, config, alwaysLow);
   }
-  strictEqual(config.o2Pct > 0, true);
-  // Once O2 reaches 1%, eukaryotes emerge
-  config.o2Pct = 2;
-  updateLife(state, config, alwaysLow);
   const hasEukaryote = Array.from(state.lifeClass).some(
     cls => cls === LIFE_CLASSES.EUKARYOTE.id,
   );
   strictEqual(hasEukaryote, true);
+  strictEqual(config.o2Pct > 0, true);
 
-  // Catastrophe tool clears life at the impact site
+  // Catastrophe tool clears lifeClass, lifeSpecies, and lifePopulation at impact site
   applyGodTool(state, config, 'meteor', 64, 32);
   strictEqual(state.lifeClass[centerIdx], LIFE_CLASS_NONE);
+  strictEqual(state.lifeSpecies[centerIdx], 0);
   strictEqual(state.lifePopulation[centerIdx], 0);
+});
+
+void test('Carniferns co-evolve from plants with abundant early Insects and starve without Insects', () => {
+  const state = createSimulationState();
+  const config = createSimulationConfig();
+  config.o2Pct = 21;
+  state.elevation.fill(200);
+  state.temperature.fill(22);
+  state.biome.fill(BIOMES.FOREST.id);
+
+  // Seed a cluster of early Insects (species 1..4) around (30, 30)
+  for (const [dx, dy] of [
+    [0, 0],
+    [1, 0],
+    [0, 1],
+  ]) {
+    const idx = getIdx(30 + dx, 30 + dy);
+    state.lifeClass[idx] = LIFE_CLASSES.INSECT.id;
+    state.lifeSpecies[idx] = 2;
+    state.lifePopulation[idx] = 0.8;
+  }
+
+  // Co-evolution spawns Carnifern on an adjacent forest cell
+  updateLife(state, config, () => 0.001);
+  const carnifernIdx = Array.from(state.lifeClass).findIndex(
+    cls => cls === LIFE_CLASSES.CARNIFERN.id,
+  );
+  strictEqual(carnifernIdx >= 0, true);
+  strictEqual(state.lifeSpecies[carnifernIdx], 1);
+
+  // Remove all Insects -> Carnifern loses prey food source and goes extinct
+  for (let i = 0; i < state.lifeClass.length; i++) {
+    if (state.lifeClass[i] === LIFE_CLASSES.INSECT.id) {
+      state.lifeClass[i] = LIFE_CLASS_NONE;
+      state.lifeSpecies[i] = 0;
+      state.lifePopulation[i] = 0;
+    }
+  }
+  for (let i = 0; i < 6; i++) {
+    updateLife(state, config, () => 0.99);
+  }
+  strictEqual(state.lifeClass[carnifernIdx], LIFE_CLASS_NONE);
 });
 
 void test('stripLifeformBackgroundPixels removes cyan chroma-key and amphibian water backdrop without touching foreground', () => {

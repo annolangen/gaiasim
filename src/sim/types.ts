@@ -36,6 +36,8 @@ export interface SimulationState {
   biome: Uint8Array;
   /** Dominant lifeform class ID from `LIFE_CLASSES` (`0` = none). */
   lifeClass: Uint8Array;
+  /** Species advancement level within the resident class (`0` = none, `1..16`, sentience at `16`). */
+  lifeSpecies: Uint8Array;
   /** Population density of the cell's resident lifeform, from 0 to 1. */
   lifePopulation: Float32Array;
 }

@@ -11,7 +11,10 @@ interface BiomeDefinition {
   name: string;
   /** RGB color channels in the 0-to-255 range, for the later renderer. */
   color: readonly [number, number, number];
-  /** Optional static biome sprite stem in `sprites/biomes/<sprite>.png`. */
+  /**
+   * Static biome sprite stem in `sprites/biomes/<sprite>.png` and its matching
+   * Page 141 habitat zone key. Omitted for ocean depth tiers and alpine rock.
+   */
   sprite?: string;
 }
 
@@ -55,208 +58,533 @@ export const BIOMES = {
 
 export type BiomeId = (typeof BIOMES)[keyof typeof BIOMES]['id'];
 
+type StaticBiomeSprite = Extract<
+  (typeof BIOMES)[keyof typeof BIOMES],
+  {sprite: string}
+>['sprite'];
+
+/** Eleven habitat columns from the manual p. 141 Chart of Life Classes and Preferred Biomes. */
+export type HabitatZone =
+  'shelf' | 'ocean' | 'deep_sea' | 'rock' | StaticBiomeSprite;
+
+/** Four-tier Page 141 suitability rating: 0=cannot exist, 1=barely, 2=fairly well, 3=paradise. */
+export type SuitabilityRating = 0 | 1 | 2 | 3;
+
+/** Maps Page 141 suitability ratings (0..3) to base carrying-capacity / growth multipliers. */
+export const SUITABILITY_MULTIPLIERS: readonly [
+  number,
+  number,
+  number,
+  number,
+] = [0, 0.25, 0.6, 1.0];
+
+/** Ocean depth tier thresholds from manual p. 133 (meters below sea level). */
+export const SHELF_MAX_DEPTH_METERS = 1_000;
+export const OCEAN_MAX_DEPTH_METERS = 2_500;
+
+const LAND_HABITAT_BY_BIOME_ID = new Map<number, HabitatZone>(
+  Object.values(BIOMES)
+    .filter((b): b is typeof b & {sprite: StaticBiomeSprite} => 'sprite' in b)
+    .map(b => [b.id, b.sprite]),
+);
+
+/** Resolve a grid cell's biome & elevation to one of the 11 Page 141 habitat zones. */
+export function resolveHabitatZone(
+  biomeId: number,
+  elevation: number,
+  seaLevel: number,
+): HabitatZone {
+  if (biomeId === BIOMES.OCEAN.id) {
+    const depth = seaLevel - elevation;
+    if (depth <= SHELF_MAX_DEPTH_METERS) return 'shelf';
+    if (depth <= OCEAN_MAX_DEPTH_METERS) return 'ocean';
+    return 'deep_sea';
+  }
+  return LAND_HABITAT_BY_BIOME_ID.get(biomeId) ?? 'rock';
+}
+
 export const LIFE_CLASS_NONE = 0;
+export const MAX_SPECIES_LEVEL = 16;
+
+export interface EvolutionLink {
+  readonly fromClassId: number;
+  readonly minSpecies: number;
+  readonly maxSpecies: number;
+}
+
+export interface OutgoingMutation {
+  readonly toClassId: number;
+  readonly minSpecies: number;
+  readonly maxSpecies: number;
+}
+
+export interface CoEvolutionRule {
+  readonly companionClassId: number;
+  readonly minSpecies: number;
+  readonly maxSpecies: number;
+}
 
 export interface LifeClassDefinition {
   /** Stored in `SimulationState.lifeClass`; `0` means uninhabited. */
   readonly id: number;
   readonly name: string;
-  /** Folder name under `public/sprites/lifeforms/<sprite>/species_1/`. */
+  readonly domain: 'sea' | 'land';
+  /** Folder name under `public/sprites/lifeforms/<sprite>/species_<n>/`. */
   readonly sprite: string;
-  /** Parent class ID required for evolution, or `null` for primordial life. */
-  readonly evolvesFrom: number | null;
+  /** Trophic tier (0=pioneer, 1=producer, 2=marine grazer, 3=land consumer, 4=marine predator, 5=insectivorous plant). */
+  readonly trophicTier: 0 | 1 | 2 | 3 | 4 | 5;
+  /** Relative evolutionary rank used for cell competition (manual p. 134). */
+  readonly competitionRank: number;
+  /** Ancestor class & species-slot ranges capable of mutating into this class. */
+  readonly evolvesFrom: readonly EvolutionLink[];
+  /** Outgoing mutations from species slots `minSpecies..maxSpecies` into child classes. */
+  readonly mutations: readonly OutgoingMutation[];
+  /** Optional co-evolution requirement (Carnifern co-evolves from plants with Insects 1-4). */
+  readonly coEvolvesFrom?: CoEvolutionRule;
+  /** Provisional GaiaSim minimum atmospheric O₂ percentage. */
   readonly minO2Pct: number;
+  /** Provisional GaiaSim livable temperature range (°C). */
   readonly minTempC: number;
   readonly maxTempC: number;
-  readonly primaryBiomes: readonly BiomeId[];
-  readonly secondaryBiomes: readonly BiomeId[];
-  readonly canGainSentience: boolean;
+  /** Direct transcription of the manual p. 141 Chart of Life Classes and Preferred Biomes. */
+  readonly habitatPreferences: Readonly<Record<HabitatZone, SuitabilityRating>>;
   /** Fallback RGB color for pixel-buffer rendering when sprites are not loaded. */
   readonly color: readonly [number, number, number];
 }
 
-/** Taxonomic life classes following plan.md section 3.B. */
+/** Whether a life class can be manually placed (false for co-evolving Carniferns). */
+export function canPlaceLifeClassManually(def: LifeClassDefinition): boolean {
+  return !def.coEvolvesFrom;
+}
+
+/** All 15 taxonomic life classes following manual pp. 135–141 and plan.md section 3.B. */
 export const LIFE_CLASSES = {
   PROKARYOTE: {
     id: 1,
     name: 'Prokaryote',
+    domain: 'sea',
     sprite: 'bacteria',
-    evolvesFrom: null,
+    trophicTier: 0,
+    competitionRank: 1,
+    evolvesFrom: [],
+    mutations: [{toClassId: 2, minSpecies: 9, maxSpecies: 16}],
     minO2Pct: 0,
     minTempC: -5,
     maxTempC: 85,
-    primaryBiomes: [BIOMES.OCEAN.id, BIOMES.SWAMP.id],
-    secondaryBiomes: [BIOMES.GRASSLAND.id, BIOMES.FOREST.id],
-    canGainSentience: false,
+    habitatPreferences: {
+      shelf: 3,
+      ocean: 3,
+      deep_sea: 3,
+      rock: 0,
+      arctic: 0,
+      boreal: 0,
+      desert: 0,
+      grass: 0,
+      forest: 0,
+      jungle: 0,
+      swamp: 0,
+    },
     color: [163, 230, 53],
   },
   EUKARYOTE: {
     id: 2,
     name: 'Eukaryote',
+    domain: 'sea',
     sprite: 'amoeba',
-    evolvesFrom: 1,
-    minO2Pct: 1,
+    trophicTier: 1,
+    competitionRank: 2,
+    evolvesFrom: [{fromClassId: 1, minSpecies: 9, maxSpecies: 16}],
+    mutations: [{toClassId: 3, minSpecies: 13, maxSpecies: 16}],
+    minO2Pct: 0,
     minTempC: 0,
     maxTempC: 50,
-    primaryBiomes: [BIOMES.OCEAN.id],
-    secondaryBiomes: [BIOMES.SWAMP.id],
-    canGainSentience: false,
+    habitatPreferences: {
+      shelf: 3,
+      ocean: 3,
+      deep_sea: 3,
+      rock: 0,
+      arctic: 0,
+      boreal: 0,
+      desert: 0,
+      grass: 0,
+      forest: 0,
+      jungle: 0,
+      swamp: 0,
+    },
     color: [52, 211, 153],
   },
   RADIATE: {
     id: 3,
     name: 'Radiate',
+    domain: 'sea',
     sprite: 'starfish',
-    evolvesFrom: 2,
-    minO2Pct: 3,
+    trophicTier: 2,
+    competitionRank: 3,
+    evolvesFrom: [{fromClassId: 2, minSpecies: 13, maxSpecies: 16}],
+    mutations: [
+      {toClassId: 4, minSpecies: 1, maxSpecies: 8},
+      {toClassId: 8, minSpecies: 9, maxSpecies: 12},
+    ],
+    minO2Pct: 2,
     minTempC: 2,
     maxTempC: 40,
-    primaryBiomes: [BIOMES.OCEAN.id],
-    secondaryBiomes: [],
-    canGainSentience: false,
+    habitatPreferences: {
+      shelf: 3,
+      ocean: 3,
+      deep_sea: 2,
+      rock: 0,
+      arctic: 0,
+      boreal: 0,
+      desert: 0,
+      grass: 0,
+      forest: 0,
+      jungle: 1,
+      swamp: 1,
+    },
     color: [244, 114, 182],
   },
   ARTHROPOD: {
     id: 4,
     name: 'Arthropod',
+    domain: 'sea',
     sprite: 'crab',
-    evolvesFrom: 2,
-    minO2Pct: 5,
-    minTempC: 5,
+    trophicTier: 2,
+    competitionRank: 4,
+    evolvesFrom: [{fromClassId: 3, minSpecies: 1, maxSpecies: 8}],
+    mutations: [
+      {toClassId: 5, minSpecies: 1, maxSpecies: 4},
+      {toClassId: 9, minSpecies: 5, maxSpecies: 12},
+    ],
+    minO2Pct: 4,
+    minTempC: 2,
     maxTempC: 45,
-    primaryBiomes: [BIOMES.OCEAN.id, BIOMES.JUNGLE.id, BIOMES.SWAMP.id],
-    secondaryBiomes: [BIOMES.GRASSLAND.id, BIOMES.FOREST.id, BIOMES.DESERT.id],
-    canGainSentience: true,
+    habitatPreferences: {
+      shelf: 3,
+      ocean: 3,
+      deep_sea: 0,
+      rock: 0,
+      arctic: 0,
+      boreal: 0,
+      desert: 0,
+      grass: 0,
+      forest: 0,
+      jungle: 1,
+      swamp: 2,
+    },
     color: [251, 146, 60],
   },
   MOLLUSK: {
     id: 5,
     name: 'Mollusk',
+    domain: 'sea',
     sprite: 'octopus',
-    evolvesFrom: 2,
-    minO2Pct: 5,
+    trophicTier: 2,
+    competitionRank: 5,
+    evolvesFrom: [{fromClassId: 4, minSpecies: 1, maxSpecies: 4}],
+    mutations: [{toClassId: 6, minSpecies: 5, maxSpecies: 12}],
+    minO2Pct: 4,
     minTempC: 0,
-    maxTempC: 38,
-    primaryBiomes: [BIOMES.OCEAN.id],
-    secondaryBiomes: [BIOMES.SWAMP.id],
-    canGainSentience: true,
+    maxTempC: 40,
+    habitatPreferences: {
+      shelf: 3,
+      ocean: 3,
+      deep_sea: 0,
+      rock: 0,
+      arctic: 0,
+      boreal: 0,
+      desert: 0,
+      grass: 0,
+      forest: 0,
+      jungle: 2,
+      swamp: 1,
+    },
     color: [192, 132, 252],
   },
   FISH: {
     id: 6,
     name: 'Fish',
+    domain: 'sea',
     sprite: 'fish',
-    evolvesFrom: 2,
-    minO2Pct: 8,
+    trophicTier: 4,
+    competitionRank: 6,
+    evolvesFrom: [{fromClassId: 5, minSpecies: 5, maxSpecies: 12}],
+    mutations: [
+      {toClassId: 10, minSpecies: 1, maxSpecies: 8},
+      {toClassId: 8, minSpecies: 9, maxSpecies: 12},
+    ],
+    minO2Pct: 7,
     minTempC: 0,
     maxTempC: 35,
-    primaryBiomes: [BIOMES.OCEAN.id],
-    secondaryBiomes: [],
-    canGainSentience: false,
+    habitatPreferences: {
+      shelf: 3,
+      ocean: 3,
+      deep_sea: 2,
+      rock: 0,
+      arctic: 0,
+      boreal: 0,
+      desert: 0,
+      grass: 0,
+      forest: 0,
+      jungle: 0,
+      swamp: 0,
+    },
     color: [56, 189, 248],
   },
-  AMPHIBIAN: {
-    id: 7,
-    name: 'Amphibian',
-    sprite: 'amphibian',
-    evolvesFrom: 6,
-    minO2Pct: 12,
-    minTempC: 10,
-    maxTempC: 38,
-    primaryBiomes: [BIOMES.SWAMP.id, BIOMES.JUNGLE.id],
-    secondaryBiomes: [BIOMES.FOREST.id, BIOMES.OCEAN.id],
-    canGainSentience: false,
-    color: [74, 222, 128],
-  },
-  REPTILE: {
-    id: 8,
-    name: 'Reptile',
-    sprite: 'reptile',
-    evolvesFrom: 7,
-    minO2Pct: 14,
-    minTempC: 15,
-    maxTempC: 48,
-    primaryBiomes: [BIOMES.DESERT.id, BIOMES.GRASSLAND.id, BIOMES.SWAMP.id],
-    secondaryBiomes: [BIOMES.FOREST.id, BIOMES.JUNGLE.id],
-    canGainSentience: true,
-    color: [250, 204, 21],
-  },
-  DINOSAUR: {
-    id: 9,
-    name: 'Dinosaur',
-    sprite: 'dinosaur',
-    evolvesFrom: 8,
-    minO2Pct: 16,
-    minTempC: 15,
-    maxTempC: 45,
-    primaryBiomes: [BIOMES.GRASSLAND.id, BIOMES.FOREST.id, BIOMES.JUNGLE.id],
-    secondaryBiomes: [BIOMES.SWAMP.id, BIOMES.DESERT.id],
-    canGainSentience: true,
-    color: [248, 113, 113],
-  },
-  BIRD: {
-    id: 10,
-    name: 'Bird',
-    sprite: 'bird',
-    evolvesFrom: 9,
-    minO2Pct: 17,
-    minTempC: -15,
-    maxTempC: 45,
-    primaryBiomes: [BIOMES.FOREST.id, BIOMES.JUNGLE.id, BIOMES.GRASSLAND.id],
-    secondaryBiomes: [BIOMES.TUNDRA.id, BIOMES.ALPINE.id, BIOMES.SWAMP.id],
-    canGainSentience: true,
-    color: [125, 211, 252],
-  },
-  MAMMAL: {
-    id: 11,
-    name: 'Mammal',
-    sprite: 'mammal',
-    evolvesFrom: 8,
-    minO2Pct: 17,
-    minTempC: -20,
-    maxTempC: 45,
-    primaryBiomes: [BIOMES.GRASSLAND.id, BIOMES.FOREST.id, BIOMES.TUNDRA.id],
-    secondaryBiomes: [BIOMES.JUNGLE.id, BIOMES.DESERT.id, BIOMES.ALPINE.id],
-    canGainSentience: true,
-    color: [251, 191, 36],
-  },
   CETACEAN: {
-    id: 12,
+    id: 7,
     name: 'Cetacean',
+    domain: 'sea',
     sprite: 'whale',
-    evolvesFrom: 11,
-    minO2Pct: 18,
+    trophicTier: 4,
+    competitionRank: 12,
+    evolvesFrom: [{fromClassId: 14, minSpecies: 5, maxSpecies: 12}],
+    mutations: [{toClassId: 14, minSpecies: 13, maxSpecies: 16}],
+    minO2Pct: 17,
     minTempC: -2,
     maxTempC: 35,
-    primaryBiomes: [BIOMES.OCEAN.id],
-    secondaryBiomes: [],
-    canGainSentience: true,
+    habitatPreferences: {
+      shelf: 3,
+      ocean: 3,
+      deep_sea: 0,
+      rock: 0,
+      arctic: 0,
+      boreal: 0,
+      desert: 0,
+      grass: 0,
+      forest: 0,
+      jungle: 2,
+      swamp: 0,
+    },
     color: [96, 165, 250],
   },
   TRICHORDATE: {
-    id: 13,
+    id: 8,
     name: 'Trichordate',
+    domain: 'land',
     sprite: 'trichordate',
-    evolvesFrom: 7,
-    minO2Pct: 15,
-    minTempC: 5,
+    trophicTier: 3,
+    competitionRank: 7,
+    evolvesFrom: [
+      {fromClassId: 3, minSpecies: 9, maxSpecies: 12},
+      {fromClassId: 6, minSpecies: 9, maxSpecies: 12},
+    ],
+    mutations: [],
+    minO2Pct: 10,
+    minTempC: -5,
     maxTempC: 40,
-    primaryBiomes: [BIOMES.FOREST.id, BIOMES.SWAMP.id],
-    secondaryBiomes: [BIOMES.GRASSLAND.id, BIOMES.JUNGLE.id],
-    canGainSentience: true,
+    habitatPreferences: {
+      shelf: 0,
+      ocean: 0,
+      deep_sea: 0,
+      rock: 0,
+      arctic: 0,
+      boreal: 3,
+      desert: 1,
+      grass: 1,
+      forest: 3,
+      jungle: 3,
+      swamp: 2,
+    },
     color: [167, 139, 250],
   },
-  CARNIVORE: {
-    id: 14,
-    name: 'Carnivore',
-    sprite: 'carnifern',
-    evolvesFrom: 11,
-    minO2Pct: 18,
+  INSECT: {
+    id: 9,
+    name: 'Insect',
+    domain: 'land',
+    sprite: 'insect',
+    trophicTier: 3,
+    competitionRank: 5,
+    evolvesFrom: [{fromClassId: 4, minSpecies: 5, maxSpecies: 12}],
+    mutations: [],
+    minO2Pct: 8,
+    minTempC: 0,
+    maxTempC: 45,
+    habitatPreferences: {
+      shelf: 3,
+      ocean: 0,
+      deep_sea: 0,
+      rock: 0,
+      arctic: 0,
+      boreal: 2,
+      desert: 2,
+      grass: 2,
+      forest: 2,
+      jungle: 2,
+      swamp: 2,
+    },
+    color: [234, 179, 8],
+  },
+  AMPHIBIAN: {
+    id: 10,
+    name: 'Amphibian',
+    domain: 'land',
+    sprite: 'amphibian',
+    trophicTier: 3,
+    competitionRank: 7,
+    evolvesFrom: [{fromClassId: 6, minSpecies: 1, maxSpecies: 8}],
+    mutations: [{toClassId: 11, minSpecies: 1, maxSpecies: 8}],
+    minO2Pct: 11,
+    minTempC: 8,
+    maxTempC: 38,
+    habitatPreferences: {
+      shelf: 3,
+      ocean: 0,
+      deep_sea: 0,
+      rock: 0,
+      arctic: 0,
+      boreal: 1,
+      desert: 0,
+      grass: 1,
+      forest: 2,
+      jungle: 3,
+      swamp: 3,
+    },
+    color: [74, 222, 128],
+  },
+  REPTILE: {
+    id: 11,
+    name: 'Reptile',
+    domain: 'land',
+    sprite: 'reptile',
+    trophicTier: 3,
+    competitionRank: 8,
+    evolvesFrom: [{fromClassId: 10, minSpecies: 1, maxSpecies: 8}],
+    mutations: [
+      {toClassId: 12, minSpecies: 1, maxSpecies: 8},
+      {toClassId: 14, minSpecies: 9, maxSpecies: 12},
+    ],
+    minO2Pct: 13,
+    minTempC: 10,
+    maxTempC: 48,
+    habitatPreferences: {
+      shelf: 0,
+      ocean: 0,
+      deep_sea: 0,
+      rock: 0,
+      arctic: 0,
+      boreal: 2,
+      desert: 3,
+      grass: 3,
+      forest: 3,
+      jungle: 2,
+      swamp: 2,
+    },
+    color: [250, 204, 21],
+  },
+  DINOSAUR: {
+    id: 12,
+    name: 'Dinosaur',
+    domain: 'land',
+    sprite: 'dinosaur',
+    trophicTier: 3,
+    competitionRank: 9,
+    evolvesFrom: [{fromClassId: 11, minSpecies: 1, maxSpecies: 8}],
+    mutations: [
+      {toClassId: 13, minSpecies: 1, maxSpecies: 4},
+      {toClassId: 14, minSpecies: 5, maxSpecies: 8},
+    ],
+    minO2Pct: 15,
+    minTempC: 10,
+    maxTempC: 45,
+    habitatPreferences: {
+      shelf: 0,
+      ocean: 0,
+      deep_sea: 0,
+      rock: 0,
+      arctic: 0,
+      boreal: 2,
+      desert: 1,
+      grass: 1,
+      forest: 3,
+      jungle: 3,
+      swamp: 2,
+    },
+    color: [248, 113, 113],
+  },
+  AVIAN: {
+    id: 13,
+    name: 'Avian',
+    domain: 'land',
+    sprite: 'bird',
+    trophicTier: 3,
+    competitionRank: 10,
+    evolvesFrom: [{fromClassId: 12, minSpecies: 1, maxSpecies: 4}],
+    mutations: [],
+    minO2Pct: 16,
     minTempC: -15,
     maxTempC: 45,
-    primaryBiomes: [BIOMES.GRASSLAND.id, BIOMES.FOREST.id],
-    secondaryBiomes: [BIOMES.TUNDRA.id, BIOMES.JUNGLE.id],
-    canGainSentience: true,
+    habitatPreferences: {
+      shelf: 0,
+      ocean: 0,
+      deep_sea: 0,
+      rock: 0,
+      arctic: 0,
+      boreal: 3,
+      desert: 1,
+      grass: 2,
+      forest: 3,
+      jungle: 3,
+      swamp: 1,
+    },
+    color: [125, 211, 252],
+  },
+  MAMMAL: {
+    id: 14,
+    name: 'Mammal',
+    domain: 'land',
+    sprite: 'mammal',
+    trophicTier: 3,
+    competitionRank: 11,
+    evolvesFrom: [
+      {fromClassId: 7, minSpecies: 13, maxSpecies: 16},
+      {fromClassId: 11, minSpecies: 9, maxSpecies: 12},
+      {fromClassId: 12, minSpecies: 5, maxSpecies: 8},
+    ],
+    mutations: [{toClassId: 7, minSpecies: 5, maxSpecies: 12}],
+    minO2Pct: 16,
+    minTempC: -20,
+    maxTempC: 45,
+    habitatPreferences: {
+      shelf: 0,
+      ocean: 0,
+      deep_sea: 0,
+      rock: 0,
+      arctic: 0,
+      boreal: 2,
+      desert: 1,
+      grass: 3,
+      forest: 3,
+      jungle: 2,
+      swamp: 2,
+    },
+    color: [251, 191, 36],
+  },
+  CARNIFERN: {
+    id: 15,
+    name: 'Carnifern',
+    domain: 'land',
+    sprite: 'carnifern',
+    trophicTier: 5,
+    competitionRank: 6,
+    evolvesFrom: [],
+    mutations: [],
+    coEvolvesFrom: {companionClassId: 9, minSpecies: 1, maxSpecies: 4},
+    minO2Pct: 11,
+    minTempC: 0,
+    maxTempC: 45,
+    habitatPreferences: {
+      shelf: 0,
+      ocean: 0,
+      deep_sea: 0,
+      rock: 0,
+      arctic: 0,
+      boreal: 1,
+      desert: 1,
+      grass: 1,
+      forest: 1,
+      jungle: 1,
+      swamp: 1,
+    },
     color: [251, 113, 133],
   },
 } as const satisfies Record<string, LifeClassDefinition>;
@@ -267,20 +595,6 @@ export type LifeClassId =
 
 export const LIFE_CLASSES_BY_ID: ReadonlyMap<number, LifeClassDefinition> =
   new Map(Object.values(LIFE_CLASSES).map(def => [def.id, def]));
-
-export const LIFE_CLASS_CHILDREN: ReadonlyMap<
-  number,
-  readonly LifeClassDefinition[]
-> = (() => {
-  const byParent = new Map<number, LifeClassDefinition[]>();
-  for (const def of Object.values(LIFE_CLASSES)) {
-    if (def.evolvesFrom === null) continue;
-    const list = byParent.get(def.evolvesFrom) ?? [];
-    list.push(def);
-    byParent.set(def.evolvesFrom, list);
-  }
-  return byParent;
-})();
 
 /** Allocate independent arrays so separate simulations never share mutable cell data. */
 export function createSimulationState(): SimulationState {
@@ -294,6 +608,7 @@ export function createSimulationState(): SimulationState {
     windY: new Float32Array(CELL_COUNT),
     biome: new Uint8Array(CELL_COUNT),
     lifeClass: new Uint8Array(CELL_COUNT),
+    lifeSpecies: new Uint8Array(CELL_COUNT),
     lifePopulation: new Float32Array(CELL_COUNT),
   };
 }
