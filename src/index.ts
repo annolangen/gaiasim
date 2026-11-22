@@ -5,7 +5,9 @@ import '@fortawesome/fontawesome-free/css/all.min.css';
 import {PlanetaryAmbientEngine} from './audio';
 import {
   clampCamera,
+  computePinchCamera,
   createMapPixels,
+  createPinchAnchor,
   getBiomeLegendSpriteUrl,
   loadSprites,
   renderWorldMap,
@@ -14,7 +16,12 @@ import {
   WORLD_PIXEL_HEIGHT,
   WORLD_PIXEL_WIDTH,
 } from './map-renderer';
-import type {MapCamera, MapLayer, SpriteSheet} from './map-renderer';
+import type {
+  MapCamera,
+  MapLayer,
+  PinchAnchor,
+  SpriteSheet,
+} from './map-renderer';
 import {
   BIOMES,
   createSimulationConfig,
@@ -60,13 +67,17 @@ const uiState = {
   activePreset: 'earth' as PlanetType,
   showIsolines: true,
   camera: {zoom: 1, panX: 0, panY: 0} as MapCamera,
+  activePointers: new Map<number, {x: number; y: number}>(),
   dragState: null as {
+    pointerId: number;
     startX: number;
     startY: number;
     startPanX: number;
     startPanY: number;
     moved: boolean;
   } | null,
+  pinchState: null as PinchAnchor | null,
+  suppressNextClick: false,
   hoveredCell: null as {x: number; y: number} | null,
   logs: [
     {message: 'Simulation core initialized [128x64].', tone: 'emerald'},
@@ -780,13 +791,27 @@ function toggleFullscreen(): void {
   }
 }
 
-function viewportControlsHtml() {
+function fullscreenButtonHtml() {
   const fullscreenSupported = Boolean(
     document.fullscreenEnabled &&
     typeof document.documentElement.requestFullscreen === 'function',
   );
+  if (!fullscreenSupported) return html``;
   const isFullscreen = Boolean(document.fullscreenElement);
 
+  return html`<button
+    type="button"
+    title=${isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+    aria-label=${isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+    aria-pressed=${isFullscreen}
+    @click=${toggleFullscreen}
+    class="fixed bottom-3 right-3 z-50 w-10 h-10 flex items-center justify-center bg-slate-900/90 hover:bg-slate-800 border border-slate-700 text-slate-200 rounded-lg shadow-xl transition"
+  >
+    <i class="fa-solid ${isFullscreen ? 'fa-compress' : 'fa-expand'}"></i>
+  </button>`;
+}
+
+function viewportControlsHtml() {
   return html`
     <div
       class="absolute bottom-3 right-3 bg-slate-900/90 border border-slate-700 rounded flex items-center gap-1 p-1 text-xs font-mono z-30 shadow-lg"
@@ -822,27 +847,35 @@ function viewportControlsHtml() {
       >
         Reset
       </button>
-      ${
-        fullscreenSupported
-          ? html`<button
-              type="button"
-              title=${isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
-              aria-label=${isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
-              aria-pressed=${isFullscreen}
-              @click=${toggleFullscreen}
-              class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded"
-            >
-              <i
-                class="fa-solid ${isFullscreen ? 'fa-compress' : 'fa-expand'}"
-              ></i>
-            </button>`
-          : html``
-      }
     </div>
   `;
 }
 
 function worldMapHtml() {
+  function getTwoPointerMetrics(canvas: HTMLCanvasElement): {
+    distance: number;
+    normMidX: number;
+    normMidY: number;
+  } | null {
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
+    const pointers = Array.from(uiState.activePointers.values());
+    if (pointers.length < 2) return null;
+    const [p1, p2] = pointers;
+    const distance = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+    const midX = (p1.x + p2.x) / 2;
+    const midY = (p1.y + p2.y) / 2;
+    const normMidX = Math.max(
+      0,
+      Math.min(0.999, (midX - rect.left) / rect.width),
+    );
+    const normMidY = Math.max(
+      0,
+      Math.min(0.999, (midY - rect.top) / rect.height),
+    );
+    return {distance, normMidX, normMidY};
+  }
+
   function handleWheel(event: WheelEvent) {
     event.preventDefault();
     const canvas = worldMapRef.value;
@@ -862,66 +895,170 @@ function worldMapHtml() {
     renderApp();
   }
 
-  function handleMouseDown(event: MouseEvent) {
-    if (event.button !== 0) return;
-    uiState.dragState = {
-      startX: event.clientX,
-      startY: event.clientY,
-      startPanX: uiState.camera.panX,
-      startPanY: uiState.camera.panY,
-      moved: false,
-    };
+  function handlePointerDown(event: PointerEvent) {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    const canvas = worldMapRef.value;
+    if (!canvas) return;
+
+    uiState.activePointers.set(event.pointerId, {
+      x: event.clientX,
+      y: event.clientY,
+    });
+    try {
+      canvas.setPointerCapture(event.pointerId);
+    } catch {
+      // Ignore synthetic events without an active pointer.
+    }
+
+    if (uiState.activePointers.size === 1) {
+      uiState.suppressNextClick = false;
+      uiState.pinchState = null;
+      uiState.dragState = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        startPanX: uiState.camera.panX,
+        startPanY: uiState.camera.panY,
+        moved: false,
+      };
+    } else if (uiState.activePointers.size === 2) {
+      uiState.dragState = null;
+      uiState.suppressNextClick = true;
+      const metrics = getTwoPointerMetrics(canvas);
+      if (metrics) {
+        uiState.pinchState = createPinchAnchor(
+          uiState.camera,
+          Math.max(1, metrics.distance),
+          metrics.normMidX,
+          metrics.normMidY,
+        );
+      }
+    }
   }
 
-  function handleMouseMove(event: MouseEvent) {
+  function handlePointerMove(event: PointerEvent) {
     const canvas = worldMapRef.value;
-    if (uiState.dragState && canvas) {
-      const dx = event.clientX - uiState.dragState.startX;
-      const dy = event.clientY - uiState.dragState.startY;
-      if (Math.hypot(dx, dy) > 4) {
-        uiState.dragState.moved = true;
-      }
-      if (uiState.dragState.moved) {
-        const rect = canvas.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) {
-          const worldDx =
-            (dx / rect.width) * (WORLD_PIXEL_WIDTH / uiState.camera.zoom);
-          const worldDy =
-            (dy / rect.height) * (WORLD_PIXEL_HEIGHT / uiState.camera.zoom);
-          uiState.camera = clampCamera({
-            zoom: uiState.camera.zoom,
-            panX: uiState.dragState.startPanX - worldDx,
-            panY: uiState.dragState.startPanY - worldDy,
-          });
+    if (uiState.activePointers.has(event.pointerId)) {
+      uiState.activePointers.set(event.pointerId, {
+        x: event.clientX,
+        y: event.clientY,
+      });
+
+      if (uiState.activePointers.size >= 2 && uiState.pinchState && canvas) {
+        const metrics = getTwoPointerMetrics(canvas);
+        if (metrics) {
+          uiState.camera = computePinchCamera(
+            uiState.pinchState,
+            metrics.distance,
+            metrics.normMidX,
+            metrics.normMidY,
+          );
           simulation.syncAudio();
+          renderApp();
+        }
+        return;
+      }
+
+      if (
+        uiState.dragState &&
+        uiState.dragState.pointerId === event.pointerId &&
+        canvas
+      ) {
+        const dx = event.clientX - uiState.dragState.startX;
+        const dy = event.clientY - uiState.dragState.startY;
+        if (Math.hypot(dx, dy) > 4) {
+          uiState.dragState.moved = true;
+        }
+        if (uiState.dragState.moved) {
+          const rect = canvas.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) {
+            const worldDx =
+              (dx / rect.width) * (WORLD_PIXEL_WIDTH / uiState.camera.zoom);
+            const worldDy =
+              (dy / rect.height) * (WORLD_PIXEL_HEIGHT / uiState.camera.zoom);
+            uiState.camera = clampCamera({
+              zoom: uiState.camera.zoom,
+              panX: uiState.dragState.startPanX - worldDx,
+              panY: uiState.dragState.startPanY - worldDy,
+            });
+            simulation.syncAudio();
+            renderApp();
+          }
         }
       }
     }
-    uiState.hoveredCell = getGridCoordsFromEvent(event);
+
+    if (event.pointerType === 'mouse') {
+      uiState.hoveredCell = getGridCoordsFromEvent(event);
+    }
   }
 
-  function handleMouseUp() {
-    if (!uiState.dragState) return;
-    // Defer clearing `moved` until after the click handler fires in the same turn.
-    const wasMoved = uiState.dragState.moved;
-    uiState.dragState = wasMoved ? {...uiState.dragState} : null;
-    window.setTimeout(() => {
-      uiState.dragState = null;
-    }, 0);
-  }
+  function handlePointerEnd(event: PointerEvent) {
+    const wasTracked = uiState.activePointers.delete(event.pointerId);
+    if (!wasTracked) return;
 
-  function handleMouseOut() {
-    uiState.hoveredCell = null;
+    const canvas = worldMapRef.value;
+    if (uiState.activePointers.size >= 2 && canvas) {
+      const metrics = getTwoPointerMetrics(canvas);
+      if (metrics) {
+        uiState.pinchState = createPinchAnchor(
+          uiState.camera,
+          Math.max(1, metrics.distance),
+          metrics.normMidX,
+          metrics.normMidY,
+        );
+      }
+      return;
+    }
+
+    if (uiState.activePointers.size === 1) {
+      // Transition cleanly from two-finger pinch to single-finger pan.
+      const [[remainingId, remainingPos]] = Array.from(
+        uiState.activePointers.entries(),
+      );
+      uiState.pinchState = null;
+      uiState.suppressNextClick = true;
+      uiState.dragState = {
+        pointerId: remainingId,
+        startX: remainingPos.x,
+        startY: remainingPos.y,
+        startPanX: uiState.camera.panX,
+        startPanY: uiState.camera.panY,
+        moved: true,
+      };
+      return;
+    }
+
+    const shouldSuppress = Boolean(
+      uiState.pinchState || uiState.dragState?.moved,
+    );
+    uiState.pinchState = null;
     uiState.dragState = null;
+    if (shouldSuppress) {
+      uiState.suppressNextClick = true;
+      window.setTimeout(() => {
+        uiState.suppressNextClick = false;
+      }, 0);
+    }
+  }
+
+  function handlePointerLeave(event: PointerEvent) {
+    if (event.pointerType === 'mouse') {
+      uiState.hoveredCell = null;
+    }
   }
 
   function handleClick(event: MouseEvent) {
-    if (uiState.dragState?.moved) {
-      uiState.dragState = null;
+    if (uiState.suppressNextClick) {
+      uiState.suppressNextClick = false;
       return;
     }
     const coords = getGridCoordsFromEvent(event);
     if (!coords) return;
+    if (uiState.activeTool === 'inspect') {
+      uiState.hoveredCell = coords;
+      return;
+    }
     simulation.applyTool(coords.x, coords.y);
   }
 
@@ -942,12 +1079,13 @@ function worldMapHtml() {
             width=${GRID_WIDTH * TILE_SIZE}
             height=${GRID_HEIGHT * TILE_SIZE}
             @wheel=${handleWheel}
-            @mousedown=${handleMouseDown}
-            @mousemove=${handleMouseMove}
-            @mouseup=${handleMouseUp}
-            @mouseout=${handleMouseOut}
+            @pointerdown=${handlePointerDown}
+            @pointermove=${handlePointerMove}
+            @pointerup=${handlePointerEnd}
+            @pointercancel=${handlePointerEnd}
+            @pointerleave=${handlePointerLeave}
             @click=${handleClick}
-            class="world-map-canvas cursor-crosshair block h-full w-full"
+            class="world-map-canvas touch-none cursor-crosshair block h-full w-full"
           ></canvas>
           ${gridTooltipHtml()} ${viewportControlsHtml()}
         </div>
@@ -1123,7 +1261,7 @@ function dashBoardHtml() {
 
       <!-- Biome Legend -->
       <div
-        class="bg-slate-950 p-2 rounded border border-slate-800 flex flex-col justify-between min-h-0 overflow-y-auto"
+        class="bg-slate-950 p-2 rounded border border-slate-800 flex flex-col justify-start min-h-0 overflow-y-auto"
       >
         <div
           class="text-[11px] text-slate-400 font-bold uppercase mb-1.5 flex items-center justify-between shrink-0"
@@ -1176,6 +1314,7 @@ function bodyHtml() {
         ${godToolsBarHtml()} ${worldMapHtml()} ${dashBoardHtml()}
       </section>
     </main>
+    ${fullscreenButtonHtml()}
   `;
 }
 

@@ -292,6 +292,46 @@ export function clampCamera(camera: MapCamera): MapCamera {
   return {zoom, panX, panY};
 }
 
+export interface PinchAnchor {
+  startDistance: number;
+  startZoom: number;
+  worldAnchorX: number;
+  worldAnchorY: number;
+}
+
+/** Snapshot the world-space anchor under the initial two-finger midpoint. */
+export function createPinchAnchor(
+  camera: MapCamera,
+  startDistance: number,
+  normMidX: number,
+  normMidY: number,
+): PinchAnchor {
+  const prev = clampCamera(camera);
+  return {
+    startDistance,
+    startZoom: prev.zoom,
+    worldAnchorX: prev.panX + normMidX * (WORLD_PIXEL_WIDTH / prev.zoom),
+    worldAnchorY: prev.panY + normMidY * (WORLD_PIXEL_HEIGHT / prev.zoom),
+  };
+}
+
+/** Compute zoomed/panned camera keeping the pinch anchor pinned under the current midpoint. */
+export function computePinchCamera(
+  anchor: PinchAnchor,
+  currentDistance: number,
+  normMidX: number,
+  normMidY: number,
+): MapCamera {
+  const ratio =
+    anchor.startDistance > 0 ? currentDistance / anchor.startDistance : 1;
+  const nextZoom = Math.max(1, Math.min(8, anchor.startZoom * ratio));
+  return clampCamera({
+    zoom: nextZoom,
+    panX: anchor.worldAnchorX - normMidX * (WORLD_PIXEL_WIDTH / nextZoom),
+    panY: anchor.worldAnchorY - normMidY * (WORLD_PIXEL_HEIGHT / nextZoom),
+  });
+}
+
 /**
  * Convert normalized viewport coordinates (0..1 across the canvas element)
  * into grid cell coordinates (0..127, 0..63), accounting for zoom and pan.

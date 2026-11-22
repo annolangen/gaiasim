@@ -7,7 +7,9 @@ import {
 import {
   clampCamera,
   computeIsolineSegments,
+  computePinchCamera,
   createMapPixels,
+  createPinchAnchor,
   getBiomeLegendSpriteUrl,
   selectCellSprite,
   selectDaisySprite,
@@ -450,4 +452,20 @@ void test('getBiomeLegendSpriteUrl maps ocean, static biomes, and alpine to spri
     getBiomeLegendSpriteUrl(BIOMES.ALPINE.id),
     './sprites/land/28.png',
   );
+});
+
+void test('createPinchAnchor and computePinchCamera zoom and pan around the pinch midpoint', () => {
+  const startCam = {zoom: 1, panX: 0, panY: 0};
+  // Pinch centered on the middle of the map (cell [64, 32])
+  const anchor = createPinchAnchor(startCam, 100, 0.5, 0.5);
+
+  // Spreading fingers to 2x distance doubles zoom while keeping [64, 32] centered
+  const zoomed = computePinchCamera(anchor, 200, 0.5, 0.5);
+  strictEqual(zoomed.zoom, 2);
+  deepStrictEqual(viewportToGridCoords(0.5, 0.5, zoomed), {x: 64, y: 32});
+
+  // Moving the midpoint right while zoomed pans the anchor to follow the fingers
+  const panned = computePinchCamera(anchor, 200, 0.75, 0.5);
+  strictEqual(panned.zoom, 2);
+  deepStrictEqual(viewportToGridCoords(0.75, 0.5, panned), {x: 64, y: 32});
 });
