@@ -119,10 +119,12 @@ export function computePlanetaryAudioParams(
   const landPct = Math.max(0, 100 - metrics.oceanCoveragePct);
   const daisyPct =
     metrics.whiteDaisyCoveragePct + metrics.blackDaisyCoveragePct;
-  const biomassRatio =
+  const landBiomassRatio =
     landPct > 0
       ? clamp(Math.max(metrics.totalBiomassPct, daisyPct) / landPct, 0, 1)
       : 0;
+  const lifeRatio = clamp((metrics.lifeCoveragePct ?? 0) / 100, 0, 1);
+  const biomassRatio = Math.max(landBiomassRatio, lifeRatio);
 
   const oceanRatio = clamp(metrics.oceanCoveragePct / 100, 0, 1);
   const droneScale =

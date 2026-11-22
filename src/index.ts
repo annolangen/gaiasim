@@ -28,6 +28,7 @@ import {
   createSimulationState,
   GRID_HEIGHT,
   GRID_WIDTH,
+  LIFE_CLASSES_BY_ID,
 } from './sim/constants';
 import {
   applyGodTool,
@@ -99,8 +100,44 @@ const simulation = (() => {
   const state = createSimulationState();
   const config = createSimulationConfig();
   const ambientAudio = new PlanetaryAmbientEngine();
+  const activeLifeClasses = new Set<number>();
   let timer: number | undefined;
   let metrics = generatePlanet(state, config, 'earth');
+  for (const id of Object.keys(metrics.lifeClassCounts)) {
+    activeLifeClasses.add(Number(id));
+  }
+
+  function recordLifeMilestones() {
+    const nextClasses = new Set(
+      Object.keys(metrics.lifeClassCounts).map(Number),
+    );
+    for (const id of nextClasses) {
+      if (!activeLifeClasses.has(id)) {
+        const def = LIFE_CLASSES_BY_ID.get(id);
+        if (def) {
+          logEvent(
+            `Evolution milestone: [${def.name.toUpperCase()}] emerged!`,
+            'emerald',
+          );
+        }
+      }
+    }
+    for (const id of activeLifeClasses) {
+      if (!nextClasses.has(id)) {
+        const def = LIFE_CLASSES_BY_ID.get(id);
+        if (def) {
+          logEvent(
+            `Extinction event: [${def.name.toUpperCase()}] went extinct!`,
+            'red',
+          );
+        }
+      }
+    }
+    activeLifeClasses.clear();
+    for (const id of nextClasses) {
+      activeLifeClasses.add(id);
+    }
+  }
 
   function stop() {
     if (timer === undefined) return;
@@ -138,6 +175,7 @@ const simulation = (() => {
       metrics.whiteDaisyHistory,
       metrics.blackDaisyHistory,
     );
+    recordLifeMilestones();
     syncAudio();
   }
 
@@ -150,6 +188,7 @@ const simulation = (() => {
       whiteDaisyHistory: metrics.whiteDaisyHistory,
       blackDaisyHistory: metrics.blackDaisyHistory,
     };
+    recordLifeMilestones();
     syncAudio();
   }
 
@@ -165,6 +204,10 @@ const simulation = (() => {
     generate(type: PlanetType) {
       uiState.activePreset = type;
       metrics = generatePlanet(state, config, type);
+      activeLifeClasses.clear();
+      for (const id of Object.keys(metrics.lifeClassCounts)) {
+        activeLifeClasses.add(Number(id));
+      }
       syncAudio();
       logEvent(`Planet generated: Presets [${type.toUpperCase()}].`, 'emerald');
     },
@@ -205,6 +248,7 @@ const simulation = (() => {
     },
     getCellInfo(gx: number, gy: number) {
       const idx = getIdx(gx, gy);
+      const lifeDef = LIFE_CLASSES_BY_ID.get(state.lifeClass[idx]);
       return {
         biomeName: BIOME_NAMES.get(state.biome[idx]) ?? 'Ocean',
         elevation: state.elevation[idx],
@@ -214,6 +258,9 @@ const simulation = (() => {
         windY: state.windY[idx],
         daisyWhite: state.daisyWhite[idx],
         daisyBlack: state.daisyBlack[idx],
+        lifeClassName:
+          lifeDef && state.lifePopulation[idx] >= 0.05 ? lifeDef.name : null,
+        lifePopulation: state.lifePopulation[idx],
       };
     },
   };
@@ -359,6 +406,7 @@ function layerSwitchHtml() {
     </h3>
     <div class="grid grid-cols-2 gap-2 text-xs">
       ${layerButtonHtml('biomes', 'Biomes/Terrain', 'fa-tree')}
+      ${layerButtonHtml('life', 'Life Forms', 'fa-dna')}
       ${layerButtonHtml('temp', 'Temperature', 'fa-temperature-half')}
       ${layerButtonHtml('moisture', 'Moisture', 'fa-cloud-rain')}
       ${layerButtonHtml('wind', 'Wind Vectors', 'fa-wind')}
@@ -455,14 +503,14 @@ function atmosphericSlidersHtml() {
         <div class="flex justify-between text-xs mb-1">
           <span class="text-slate-400">Oxygen Level (O2)</span>
           <span class="font-mono text-blue-400 font-bold">
-            ${simulation.config.o2Pct}%
+            ${simulation.config.o2Pct.toFixed(1)}%
           </span>
         </div>
         <input
           type="range"
           min="0"
           max="40"
-          step="1"
+          step="0.5"
           .value=${String(simulation.config.o2Pct)}
           @input=${oxygenInput}
           class="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer"
@@ -632,6 +680,14 @@ const GOD_TOOLS: readonly GodToolMeta[] = [
     labelBreakpoint: 'lg',
   },
   {
+    id: 'seed_life',
+    label: 'Seed Life',
+    icon: 'fa-bacterium',
+    iconClass: 'text-lime-400',
+    title: 'Seed Prokaryote Life',
+    labelBreakpoint: 'lg',
+  },
+  {
     id: 'nuke',
     label: 'Heat Blast',
     icon: 'fa-fire',
@@ -777,6 +833,14 @@ function gridTooltipHtml() {
         <span class="text-slate-400">Daisy Cover:</span>
         <span class="text-purple-300">
           ${formatDaisyCover(info.daisyWhite, info.daisyBlack)}
+        </span>
+        <span class="text-slate-400">Life:</span>
+        <span class="text-lime-300">
+          ${
+            info.lifeClassName
+              ? `${info.lifeClassName} (${Math.round(info.lifePopulation * 100)}%)`
+              : 'None'
+          }
         </span>
       </div>
     </div>

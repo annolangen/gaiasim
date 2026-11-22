@@ -10,6 +10,7 @@ export type GodTool =
   | 'lower'
   | 'daisy_white'
   | 'daisy_black'
+  | 'seed_life'
   | 'nuke';
 
 /**
@@ -33,6 +34,10 @@ export interface SimulationState {
   windY: Float32Array;
   /** Biome IDs from `BIOMES`, stored as unsigned bytes. */
   biome: Uint8Array;
+  /** Dominant lifeform class ID from `LIFE_CLASSES` (`0` = none). */
+  lifeClass: Uint8Array;
+  /** Population density of the cell's resident lifeform, from 0 to 1. */
+  lifePopulation: Float32Array;
 }
 
 export interface SimulationConfig {
@@ -44,7 +49,7 @@ export interface SimulationConfig {
   co2Ppm: number;
   /** Axial tilt in degrees; determines the latitude of the polar circles. */
   axialTiltDegrees: number;
-  /** Atmospheric oxygen percentage; retained from the UI, not used by current equations. */
+  /** Atmospheric oxygen percentage (0–40%); produced by photosynthesis and gates lifeform evolution. */
   o2Pct: number;
   /** Meters added to the baseline sea level, which is 0 m. */
   seaLevelOffset: number;
@@ -64,4 +69,8 @@ export interface SimulationMetrics {
   whiteDaisyCoveragePct: number;
   /** Sum of per-cell black daisy coverage, expressed as a percentage of the whole grid. */
   blackDaisyCoveragePct: number;
+  /** Percentage of grid cells currently inhabited by lifeforms. */
+  lifeCoveragePct: number;
+  /** Cell counts keyed by active `LifeClassId`. */
+  lifeClassCounts: Record<number, number>;
 }

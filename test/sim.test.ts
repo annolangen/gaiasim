@@ -15,6 +15,7 @@ import {
   selectDaisySprite,
   selectLandTileIndex,
   selectOceanSprite,
+  stripLifeformBackgroundPixels,
   viewportToGridCoords,
   WORLD_PIXEL_HEIGHT,
   WORLD_PIXEL_WIDTH,
@@ -26,13 +27,17 @@ import {
   createSimulationState,
   GRID_HEIGHT,
   GRID_WIDTH,
+  LIFE_CLASS_NONE,
+  LIFE_CLASSES,
 } from '../src/sim/constants';
 import {
   applyGodTool,
   classifyBiomes,
   generatePlanet,
   getIdx,
+  getLifeHabitatSuitability,
   simulationStep,
+  updateLife,
   updateWindVectors,
 } from '../src/sim/engine';
 import {createNoise2D} from '../src/sim/noise';
@@ -282,6 +287,7 @@ void test('selectCellSprite maps biomes, ocean depth frames, daisies, and alpine
     },
     land: Array.from({length: 32}, (_, i) => fakeImg(`land:${i}`)),
     daisy: Array.from({length: 7}, (_, i) => fakeImg(`daisy:${i}`)),
+    lifeforms: new Map(),
   };
 
   const state = createSimulationState();
@@ -363,6 +369,8 @@ void test('computePlanetaryAudioParams maps planetary metrics to bounded audio p
     totalBiomassPct: 0,
     whiteDaisyCoveragePct: 0,
     blackDaisyCoveragePct: 0,
+    lifeCoveragePct: 0,
+    lifeClassCounts: {},
   });
   strictEqual(coldBarren.biomassRatio, 0);
   strictEqual(coldBarren.padFilterCutoffHz, 400);
@@ -378,6 +386,8 @@ void test('computePlanetaryAudioParams maps planetary metrics to bounded audio p
     totalBiomassPct: 50,
     whiteDaisyCoveragePct: 0,
     blackDaisyCoveragePct: 0,
+    lifeCoveragePct: 0,
+    lifeClassCounts: {},
   });
   strictEqual(lushTemperate.biomassRatio, 1);
   strictEqual(lushTemperate.padFilterCutoffHz, 1125);
@@ -395,6 +405,8 @@ void test('computePlanetaryAudioParams maps planetary metrics to bounded audio p
       totalBiomassPct: 50,
       whiteDaisyCoveragePct: 0,
       blackDaisyCoveragePct: 0,
+      lifeCoveragePct: 0,
+      lifeClassCounts: {},
     },
     {meanWindSpeedMps: 0, zoom: 8},
   );
@@ -408,6 +420,8 @@ void test('computePlanetaryAudioParams maps planetary metrics to bounded audio p
       totalBiomassPct: 50,
       whiteDaisyCoveragePct: 0,
       blackDaisyCoveragePct: 0,
+      lifeCoveragePct: 0,
+      lifeClassCounts: {},
     },
     {meanWindSpeedMps: 8, zoom: 3},
   );
@@ -468,4 +482,79 @@ void test('createPinchAnchor and computePinchCamera zoom and pan around the pinc
   const panned = computePinchCamera(anchor, 200, 0.75, 0.5);
   strictEqual(panned.zoom, 2);
   deepStrictEqual(viewportToGridCoords(0.75, 0.5, panned), {x: 64, y: 32});
+});
+
+void test('lifeforms enforce O2/habitat suitability, photosynthesize O2, spread, evolve, and respond to God Tools', () => {
+  // Suitability checks
+  strictEqual(
+    getLifeHabitatSuitability(LIFE_CLASSES.PROKARYOTE, BIOMES.OCEAN.id, 20, 0),
+    1.0,
+  );
+  strictEqual(
+    getLifeHabitatSuitability(LIFE_CLASSES.EUKARYOTE, BIOMES.OCEAN.id, 20, 0.5),
+    0,
+  );
+  strictEqual(
+    getLifeHabitatSuitability(LIFE_CLASSES.EUKARYOTE, BIOMES.OCEAN.id, 20, 1.5),
+    1.0,
+  );
+  strictEqual(
+    getLifeHabitatSuitability(LIFE_CLASSES.AMPHIBIAN, BIOMES.OCEAN.id, 20, 12),
+    0.5,
+  );
+
+  // Photosynthesis raises O2 from 0% and enables prokaryote -> eukaryote evolution
+  const state = createSimulationState();
+  const config = createSimulationConfig();
+  config.o2Pct = 0;
+  state.elevation.fill(-2_000);
+  state.temperature.fill(20);
+  state.biome.fill(BIOMES.OCEAN.id);
+
+  // Seed prokaryotes via God Tool in the middle of the ocean
+  applyGodTool(state, config, 'seed_life', 64, 32);
+  const centerIdx = getIdx(64, 32);
+  strictEqual(state.lifeClass[centerIdx], LIFE_CLASSES.PROKARYOTE.id);
+  strictEqual(Math.abs(state.lifePopulation[centerIdx] - 0.7) < 1e-6, true);
+
+  // Deterministic low random source triggers spread and evolution once O2 >= 1%
+  const alwaysLow = () => 0.001;
+  for (let i = 0; i < 40; i++) {
+    updateLife(state, config, alwaysLow);
+  }
+  strictEqual(config.o2Pct > 0, true);
+  // Once O2 reaches 1%, eukaryotes emerge
+  config.o2Pct = 2;
+  updateLife(state, config, alwaysLow);
+  const hasEukaryote = Array.from(state.lifeClass).some(
+    cls => cls === LIFE_CLASSES.EUKARYOTE.id,
+  );
+  strictEqual(hasEukaryote, true);
+
+  // Catastrophe tool clears life at the impact site
+  applyGodTool(state, config, 'meteor', 64, 32);
+  strictEqual(state.lifeClass[centerIdx], LIFE_CLASS_NONE);
+  strictEqual(state.lifePopulation[centerIdx], 0);
+});
+
+void test('stripLifeformBackgroundPixels removes cyan chroma-key and amphibian water backdrop without touching foreground', () => {
+  // 2x2 sprite with cyan top row and interior-only blue bottom-left (not both bottom corners)
+  const regularPixels = new Uint8ClampedArray([
+    32, 200, 248, 255, 32, 200, 248, 255, 80, 80, 192, 255, 16, 16, 16, 255,
+  ]);
+  stripLifeformBackgroundPixels(regularPixels, 2, 2);
+  strictEqual(regularPixels[3], 0);
+  strictEqual(regularPixels[7], 0);
+  strictEqual(regularPixels[11], 255); // preserved when not a full bottom-corner backdrop
+  strictEqual(regularPixels[15], 255);
+
+  // 2x2 amphibian-style sprite with cyan top and blue water across both bottom corners
+  const amphibianPixels = new Uint8ClampedArray([
+    32, 200, 248, 255, 160, 160, 160, 255, 80, 80, 192, 255, 80, 80, 192, 255,
+  ]);
+  stripLifeformBackgroundPixels(amphibianPixels, 2, 2);
+  strictEqual(amphibianPixels[3], 0);
+  strictEqual(amphibianPixels[7], 255); // grey body preserved
+  strictEqual(amphibianPixels[11], 0);
+  strictEqual(amphibianPixels[15], 0);
 });

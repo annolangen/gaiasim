@@ -1,9 +1,17 @@
-import {BIOMES, CELL_COUNT, GRID_HEIGHT, GRID_WIDTH} from './sim/constants';
+import {
+  BIOMES,
+  CELL_COUNT,
+  GRID_HEIGHT,
+  GRID_WIDTH,
+  LIFE_CLASSES,
+  LIFE_CLASSES_BY_ID,
+} from './sim/constants';
 import type {BiomeId} from './sim/constants';
 import {getIdx} from './sim/engine';
 import type {SimulationConfig, SimulationState} from './sim/types';
 
-export type MapLayer = 'biomes' | 'temp' | 'moisture' | 'wind' | 'daisies';
+export type MapLayer =
+  'biomes' | 'temp' | 'moisture' | 'wind' | 'daisies' | 'life';
 
 export const TILE_SIZE = 16;
 export const WORLD_PIXEL_WIDTH = GRID_WIDTH * TILE_SIZE;
@@ -45,6 +53,73 @@ export interface SpriteSheet {
   };
   land: HTMLImageElement[];
   daisy: HTMLImageElement[];
+  lifeforms: ReadonlyMap<
+    number,
+    readonly [CanvasImageSource, CanvasImageSource]
+  >;
+}
+
+const LIFEFORM_CHROMA_KEY = [32, 200, 248] as const;
+const AMPHIBIAN_WATER_BACKDROP = [80, 80, 192] as const;
+
+function matchesRgb(
+  data: Uint8ClampedArray,
+  offset: number,
+  rgb: readonly [number, number, number],
+): boolean {
+  return (
+    data[offset] === rgb[0] &&
+    data[offset + 1] === rgb[1] &&
+    data[offset + 2] === rgb[2]
+  );
+}
+
+/**
+ * Strip the opaque light-blue chroma-key background (`rgb(32, 200, 248)`) from
+ * terrasim lifeform sprites so they composite transparently over biome tiles.
+ * Also strips the bottom water backdrop (`rgb(80, 80, 192)`) when present at
+ * both bottom corners (e.g. amphibian sprites).
+ */
+export function stripLifeformBackgroundPixels(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+): void {
+  const blOffset = (height - 1) * width * 4;
+  const brOffset = (height * width - 1) * 4;
+  const hasWaterBackdrop =
+    width > 0 &&
+    height > 0 &&
+    matchesRgb(data, blOffset, AMPHIBIAN_WATER_BACKDROP) &&
+    matchesRgb(data, brOffset, AMPHIBIAN_WATER_BACKDROP);
+
+  for (let i = 0; i < data.length; i += 4) {
+    if (
+      matchesRgb(data, i, LIFEFORM_CHROMA_KEY) ||
+      (hasWaterBackdrop && matchesRgb(data, i, AMPHIBIAN_WATER_BACKDROP))
+    ) {
+      data[i + 3] = 0;
+    }
+  }
+}
+
+function keyOutLifeformSprite(img: HTMLImageElement): CanvasImageSource {
+  if (typeof document === 'undefined') return img;
+  const width = img.naturalWidth || img.width;
+  const height = img.naturalHeight || img.height;
+  if (width === 0 || height === 0) return img;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return img;
+
+  ctx.drawImage(img, 0, 0);
+  const imageData = ctx.getImageData(0, 0, width, height);
+  stripLifeformBackgroundPixels(imageData.data, width, height);
+  ctx.putImageData(imageData, 0, 0);
+  return canvas;
 }
 
 function loadImage(src: string): Promise<HTMLImageElement> {
@@ -87,48 +162,75 @@ export async function loadSprites(baseUrl = './sprites'): Promise<SpriteSheet> {
   const biomeEntries = Object.values(BIOMES).filter(
     (b): b is typeof b & {sprite: string} => 'sprite' in b,
   );
+  const lifeEntries = Object.values(LIFE_CLASSES);
 
-  const [biomePairs, shallow, regular, deep, land, daisy] = await Promise.all([
-    Promise.all(
-      biomeEntries.map(
-        async ({id, sprite}): Promise<[number, HTMLImageElement]> => [
-          id,
-          await loadImage(`${baseUrl}/biomes/${sprite}.png`),
-        ],
+  const [biomePairs, shallow, regular, deep, land, daisy, lifePairs] =
+    await Promise.all([
+      Promise.all(
+        biomeEntries.map(
+          async ({id, sprite}): Promise<[number, HTMLImageElement]> => [
+            id,
+            await loadImage(`${baseUrl}/biomes/${sprite}.png`),
+          ],
+        ),
       ),
-    ),
-    Promise.all(
-      Array.from({length: OCEAN_FRAME_COUNT}, (_, i) =>
-        loadImage(`${baseUrl}/ocean/shallow/${pad2(i)}.png`),
+      Promise.all(
+        Array.from({length: OCEAN_FRAME_COUNT}, (_, i) =>
+          loadImage(`${baseUrl}/ocean/shallow/${pad2(i)}.png`),
+        ),
       ),
-    ),
-    Promise.all(
-      Array.from({length: OCEAN_FRAME_COUNT}, (_, i) =>
-        loadImage(`${baseUrl}/ocean/regular/${pad2(i)}.png`),
+      Promise.all(
+        Array.from({length: OCEAN_FRAME_COUNT}, (_, i) =>
+          loadImage(`${baseUrl}/ocean/regular/${pad2(i)}.png`),
+        ),
       ),
-    ),
-    Promise.all(
-      Array.from({length: OCEAN_FRAME_COUNT}, (_, i) =>
-        loadImage(`${baseUrl}/ocean/deep/${pad2(i)}.png`),
+      Promise.all(
+        Array.from({length: OCEAN_FRAME_COUNT}, (_, i) =>
+          loadImage(`${baseUrl}/ocean/deep/${pad2(i)}.png`),
+        ),
       ),
-    ),
-    Promise.all(
-      Array.from({length: LAND_TILE_COUNT}, (_, i) =>
-        loadImage(`${baseUrl}/land/${pad2(i)}.png`),
+      Promise.all(
+        Array.from({length: LAND_TILE_COUNT}, (_, i) =>
+          loadImage(`${baseUrl}/land/${pad2(i)}.png`),
+        ),
       ),
-    ),
-    Promise.all(
-      Array.from({length: DAISY_TILE_COUNT}, (_, i) =>
-        loadImage(`${baseUrl}/daisy/${pad2(i)}.png`),
+      Promise.all(
+        Array.from({length: DAISY_TILE_COUNT}, (_, i) =>
+          loadImage(`${baseUrl}/daisy/${pad2(i)}.png`),
+        ),
       ),
-    ),
-  ]);
+      Promise.all(
+        lifeEntries.map(
+          async ({
+            id,
+            sprite,
+          }): Promise<
+            [number, readonly [CanvasImageSource, CanvasImageSource]]
+          > => [
+            id,
+            [
+              keyOutLifeformSprite(
+                await loadImage(
+                  `${baseUrl}/lifeforms/${sprite}/species_1/0.png`,
+                ),
+              ),
+              keyOutLifeformSprite(
+                await loadImage(
+                  `${baseUrl}/lifeforms/${sprite}/species_1/1.png`,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    ]);
 
   return {
     biomes: new Map(biomePairs),
     ocean: {shallow, regular, deep},
     land,
     daisy,
+    lifeforms: new Map(lifePairs),
   };
 }
 
@@ -270,6 +372,15 @@ export function createMapPixels(
         Math.round(bare * 68 + white * 248 + black * 14),
         Math.round(bare * 80 + white * 255 + black * 20),
       ];
+    },
+    life: index => {
+      const def = LIFE_CLASSES_BY_ID.get(state.lifeClass[index]);
+      if (def && state.lifePopulation[index] >= 0.05) {
+        return def.color;
+      }
+      return state.elevation[index] <= config.seaLevelOffset
+        ? [15, 23, 42]
+        : [30, 41, 59];
     },
   };
   const paint = paintByLayer[layer];
@@ -624,6 +735,30 @@ function renderWorldPass(
       drawScaledPixels(context, createMapPixels(state, config, layer), 0.72);
     } else if (layer === 'wind') {
       drawScaledPixels(context, createMapPixels(state, config, 'wind'), 0.3);
+    } else if (layer === 'life') {
+      context.fillStyle = 'rgba(2, 6, 23, 0.45)';
+      context.fillRect(0, 0, WORLD_PIXEL_WIDTH, WORLD_PIXEL_HEIGHT);
+    }
+
+    if (layer === 'biomes' || layer === 'life') {
+      const lifeFrameBase = Math.floor(frame / 2);
+      for (let y = 0; y < GRID_HEIGHT; y++) {
+        for (let x = 0; x < GRID_WIDTH; x++) {
+          const idx = y * GRID_WIDTH + x;
+          const lifeCls = state.lifeClass[idx];
+          if (lifeCls === 0 || state.lifePopulation[idx] < 0.05) continue;
+          const pair = sprites.lifeforms.get(lifeCls);
+          if (!pair) continue;
+          const sprite = pair[(lifeFrameBase + ((x + y) & 1)) % 2];
+          context.drawImage(
+            sprite,
+            x * TILE_SIZE,
+            y * TILE_SIZE,
+            TILE_SIZE,
+            TILE_SIZE,
+          );
+        }
+      }
     }
   }
 
