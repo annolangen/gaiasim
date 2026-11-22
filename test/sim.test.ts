@@ -5,6 +5,7 @@ import {
   sampleViewportWindSpeed,
 } from '../src/audio';
 import {
+  centerCameraOnGridCell,
   clampCamera,
   computeIsolineSegments,
   computePinchCamera,
@@ -371,6 +372,7 @@ void test('computePlanetaryAudioParams maps planetary metrics to bounded audio p
     blackDaisyCoveragePct: 0,
     lifeCoveragePct: 0,
     lifeClassCounts: {},
+    lifeClassSampleCoords: {},
   });
   strictEqual(coldBarren.biomassRatio, 0);
   strictEqual(coldBarren.padFilterCutoffHz, 400);
@@ -388,6 +390,7 @@ void test('computePlanetaryAudioParams maps planetary metrics to bounded audio p
     blackDaisyCoveragePct: 0,
     lifeCoveragePct: 0,
     lifeClassCounts: {},
+    lifeClassSampleCoords: {},
   });
   strictEqual(lushTemperate.biomassRatio, 1);
   strictEqual(lushTemperate.padFilterCutoffHz, 1125);
@@ -407,6 +410,7 @@ void test('computePlanetaryAudioParams maps planetary metrics to bounded audio p
       blackDaisyCoveragePct: 0,
       lifeCoveragePct: 0,
       lifeClassCounts: {},
+      lifeClassSampleCoords: {},
     },
     {meanWindSpeedMps: 0, zoom: 8},
   );
@@ -422,6 +426,7 @@ void test('computePlanetaryAudioParams maps planetary metrics to bounded audio p
       blackDaisyCoveragePct: 0,
       lifeCoveragePct: 0,
       lifeClassCounts: {},
+      lifeClassSampleCoords: {},
     },
     {meanWindSpeedMps: 8, zoom: 3},
   );
@@ -557,4 +562,15 @@ void test('stripLifeformBackgroundPixels removes cyan chroma-key and amphibian w
   strictEqual(amphibianPixels[7], 255); // grey body preserved
   strictEqual(amphibianPixels[11], 0);
   strictEqual(amphibianPixels[15], 0);
+});
+
+void test('centerCameraOnGridCell centers target cell at requested zoom including longitude wrap', () => {
+  const centered = centerCameraOnGridCell(42, 30, 4);
+  strictEqual(centered.zoom, 4);
+  deepStrictEqual(viewportToGridCoords(0.5, 0.5, centered), {x: 42, y: 30});
+
+  // Near the international date line (x=0), panX wraps around and cell x=0 stays centered
+  const wrapped = centerCameraOnGridCell(0, 32, 4);
+  strictEqual(wrapped.zoom, 4);
+  deepStrictEqual(viewportToGridCoords(0.5, 0.5, wrapped), {x: 0, y: 32});
 });

@@ -655,6 +655,7 @@ export function calculateMetrics(
   let totalBlackDaisies = 0;
   let inhabitedCount = 0;
   const lifeClassCounts: Record<number, number> = {};
+  const lifeClassSampleCoords: Record<number, {x: number; y: number}> = {};
   const seaLevel = BASE_SEA_LEVEL + config.seaLevelOffset;
 
   for (let i = 0; i < CELL_COUNT; i++) {
@@ -672,6 +673,12 @@ export function calculateMetrics(
     if (lifeCls !== LIFE_CLASS_NONE && state.lifePopulation[i] >= 0.05) {
       inhabitedCount++;
       lifeClassCounts[lifeCls] = (lifeClassCounts[lifeCls] ?? 0) + 1;
+      if (!lifeClassSampleCoords[lifeCls]) {
+        lifeClassSampleCoords[lifeCls] = {
+          x: i % GRID_WIDTH,
+          y: Math.floor(i / GRID_WIDTH),
+        };
+      }
     }
   }
   const averageTemperatureC = sumTemp / CELL_COUNT;
@@ -691,6 +698,7 @@ export function calculateMetrics(
     blackDaisyCoveragePct,
     lifeCoveragePct: Math.round((inhabitedCount / CELL_COUNT) * 100),
     lifeClassCounts,
+    lifeClassSampleCoords,
   };
 }
 

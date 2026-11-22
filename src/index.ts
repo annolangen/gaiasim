@@ -4,6 +4,7 @@ import './style.css';
 import '@fortawesome/fontawesome-free/css/all.min.css';
 import {PlanetaryAmbientEngine} from './audio';
 import {
+  centerCameraOnGridCell,
   clampCamera,
   computePinchCamera,
   createMapPixels,
@@ -43,6 +44,7 @@ import type {GodTool, PlanetType} from './sim/types';
 interface EventLogEntry {
   message: string;
   tone: 'info' | 'emerald' | 'amber' | 'cyan' | 'red' | 'muted';
+  coords?: {x: number; y: number};
 }
 
 const LOG_TONE_CLASSES: Record<EventLogEntry['tone'], string> = {
@@ -59,6 +61,7 @@ const BIOME_NAMES = new Map<number, string>(
 );
 
 const MAX_LOG_ENTRIES = 100;
+const EVENT_ZOOM_LEVEL = 4;
 
 const uiState = {
   isRunning: false,
@@ -67,6 +70,7 @@ const uiState = {
   activeTool: 'inspect' as GodTool,
   activePreset: 'earth' as PlanetType,
   showIsolines: true,
+  zoomToEvent: false,
   camera: {zoom: 1, panX: 0, panY: 0} as MapCamera,
   activePointers: new Map<number, {x: number; y: number}>(),
   dragState: null as {
@@ -89,10 +93,22 @@ const SIMULATION_TICK_INTERVAL_MS = 1_000;
 const worldMapRef = createRef<HTMLCanvasElement>();
 const eventConsoleRef = createRef<HTMLDivElement>();
 
-function logEvent(message: string, tone: EventLogEntry['tone'] = 'info') {
-  uiState.logs.push({message, tone});
+function focusGridCell(x: number, y: number): void {
+  uiState.camera = centerCameraOnGridCell(x, y, EVENT_ZOOM_LEVEL);
+  simulation.syncAudio();
+}
+
+function logEvent(
+  message: string,
+  tone: EventLogEntry['tone'] = 'info',
+  options?: {coords?: {x: number; y: number}; autoZoom?: boolean},
+) {
+  uiState.logs.push({message, tone, coords: options?.coords});
   if (uiState.logs.length > MAX_LOG_ENTRIES) {
     uiState.logs.splice(0, uiState.logs.length - MAX_LOG_ENTRIES);
+  }
+  if (options?.autoZoom && uiState.zoomToEvent && options.coords) {
+    focusGridCell(options.coords.x, options.coords.y);
   }
 }
 
@@ -100,42 +116,45 @@ const simulation = (() => {
   const state = createSimulationState();
   const config = createSimulationConfig();
   const ambientAudio = new PlanetaryAmbientEngine();
-  const activeLifeClasses = new Set<number>();
+  const activeLifeClassCoords = new Map<number, {x: number; y: number}>();
   let timer: number | undefined;
   let metrics = generatePlanet(state, config, 'earth');
-  for (const id of Object.keys(metrics.lifeClassCounts)) {
-    activeLifeClasses.add(Number(id));
+  for (const [id, coords] of Object.entries(metrics.lifeClassSampleCoords)) {
+    activeLifeClassCoords.set(Number(id), coords);
   }
 
   function recordLifeMilestones() {
-    const nextClasses = new Set(
-      Object.keys(metrics.lifeClassCounts).map(Number),
-    );
-    for (const id of nextClasses) {
-      if (!activeLifeClasses.has(id)) {
+    const nextCoords = new Map<number, {x: number; y: number}>();
+    for (const [id, coords] of Object.entries(metrics.lifeClassSampleCoords)) {
+      nextCoords.set(Number(id), coords);
+    }
+    for (const [id, coords] of nextCoords) {
+      if (!activeLifeClassCoords.has(id)) {
         const def = LIFE_CLASSES_BY_ID.get(id);
         if (def) {
           logEvent(
-            `Evolution milestone: [${def.name.toUpperCase()}] emerged!`,
+            `Evolution milestone: [${def.name.toUpperCase()}] emerged at (${coords.x}, ${coords.y})!`,
             'emerald',
+            {coords, autoZoom: true},
           );
         }
       }
     }
-    for (const id of activeLifeClasses) {
-      if (!nextClasses.has(id)) {
+    for (const [id, lastCoords] of activeLifeClassCoords) {
+      if (!nextCoords.has(id)) {
         const def = LIFE_CLASSES_BY_ID.get(id);
         if (def) {
           logEvent(
             `Extinction event: [${def.name.toUpperCase()}] went extinct!`,
             'red',
+            {coords: lastCoords},
           );
         }
       }
     }
-    activeLifeClasses.clear();
-    for (const id of nextClasses) {
-      activeLifeClasses.add(id);
+    activeLifeClassCoords.clear();
+    for (const [id, coords] of nextCoords) {
+      activeLifeClassCoords.set(id, coords);
     }
   }
 
@@ -204,9 +223,11 @@ const simulation = (() => {
     generate(type: PlanetType) {
       uiState.activePreset = type;
       metrics = generatePlanet(state, config, type);
-      activeLifeClasses.clear();
-      for (const id of Object.keys(metrics.lifeClassCounts)) {
-        activeLifeClasses.add(Number(id));
+      activeLifeClassCoords.clear();
+      for (const [id, coords] of Object.entries(
+        metrics.lifeClassSampleCoords,
+      )) {
+        activeLifeClassCoords.set(Number(id), coords);
       }
       syncAudio();
       logEvent(`Planet generated: Presets [${type.toUpperCase()}].`, 'emerald');
@@ -228,6 +249,7 @@ const simulation = (() => {
       logEvent(
         `Intervention triggered: [${uiState.activeTool.toUpperCase()}] at grid (${gx}, ${gy}).`,
         'amber',
+        {coords: {x: gx, y: gy}},
       );
     },
     triggerIceAge() {
@@ -591,22 +613,48 @@ function logBoxHtml() {
     <div
       class="flex-1 bg-slate-950 p-3 rounded-lg border border-slate-800 flex flex-col justify-between min-h-30"
     >
-      <h3
-        class="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center justify-between"
-      >
-        <span>Events Console</span>
-        <i class="fa-solid fa-terminal text-[10px]"></i>
-      </h3>
+      <div class="mb-1 flex items-center justify-between gap-2">
+        <h3
+          class="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5"
+        >
+          <i class="fa-solid fa-terminal text-[10px]"></i>
+          <span>Events Console</span>
+        </h3>
+        <label
+          class="flex items-center gap-1 text-[10px] text-slate-400 hover:text-slate-200 cursor-pointer select-none"
+          title="Auto-center and zoom (4x) on newly emerged lifeform events"
+        >
+          <input
+            type="checkbox"
+            .checked=${uiState.zoomToEvent}
+            @change=${(event: Event) => {
+              uiState.zoomToEvent = (
+                event.currentTarget as HTMLInputElement
+              ).checked;
+            }}
+            class="accent-emerald-500 cursor-pointer"
+          />
+          <span>Zoom to event</span>
+        </label>
+      </div>
       <div
         ${ref(eventConsoleRef)}
         id="eventConsole"
         class="flex-1 font-mono text-[10px] text-slate-400 overflow-y-auto space-y-1 my-1 pr-1"
       >
-        ${uiState.logs.map(
-          entry =>
-            html`<p class=${LOG_TONE_CLASSES[entry.tone]}>
-              > ${entry.message}
-            </p>`,
+        ${uiState.logs.map(entry =>
+          entry.coords
+            ? html`<button
+                type="button"
+                @click=${() => focusGridCell(entry.coords!.x, entry.coords!.y)}
+                title=${`Center & zoom (${EVENT_ZOOM_LEVEL}x) on (${entry.coords.x}, ${entry.coords.y})`}
+                class="block w-full text-left ${LOG_TONE_CLASSES[entry.tone]} hover:bg-slate-800/70 hover:underline rounded px-1 -mx-1 cursor-pointer transition"
+              >
+                > ${entry.message}
+              </button>`
+            : html`<p class=${LOG_TONE_CLASSES[entry.tone]}>
+                > ${entry.message}
+              </p>`,
         )}
       </div>
     </div>

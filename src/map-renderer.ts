@@ -403,6 +403,24 @@ export function clampCamera(camera: MapCamera): MapCamera {
   return {zoom, panX, panY};
 }
 
+/** Center the camera on grid cell `(gx, gy)` at the given zoom level. */
+export function centerCameraOnGridCell(
+  gx: number,
+  gy: number,
+  zoom: number,
+): MapCamera {
+  const clampedZoom = Math.max(1, Math.min(8, zoom));
+  const wrappedX = ((gx % GRID_WIDTH) + GRID_WIDTH) % GRID_WIDTH;
+  const clampedY = Math.max(0, Math.min(GRID_HEIGHT - 1, gy));
+  const worldX = (wrappedX + 0.5) * TILE_SIZE;
+  const worldY = (clampedY + 0.5) * TILE_SIZE;
+  return clampCamera({
+    zoom: clampedZoom,
+    panX: worldX - WORLD_PIXEL_WIDTH / (2 * clampedZoom),
+    panY: worldY - WORLD_PIXEL_HEIGHT / (2 * clampedZoom),
+  });
+}
+
 export interface PinchAnchor {
   startDistance: number;
   startZoom: number;

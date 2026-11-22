@@ -73,4 +73,6 @@ export interface SimulationMetrics {
   lifeCoveragePct: number;
   /** Cell counts keyed by active `LifeClassId`. */
   lifeClassCounts: Record<number, number>;
+  /** Representative `(x, y)` grid coordinates keyed by active `LifeClassId`. */
+  lifeClassSampleCoords: Record<number, {x: number; y: number}>;
 }
