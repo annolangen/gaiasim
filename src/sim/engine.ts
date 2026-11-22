@@ -7,8 +7,10 @@ import {
   LIFE_CLASSES,
   LIFE_CLASSES_BY_ID,
   MAX_SPECIES_LEVEL,
+  PLANT_BIOME_MIN_O2_PCT,
   resolveHabitatZone,
   SUITABILITY_MULTIPLIERS,
+  TIME_SCALES,
 } from './constants';
 import type {BiomeId, HabitatZone, LifeClassDefinition} from './constants';
 import {noise2D} from './noise';
@@ -18,6 +20,7 @@ import type {
   SimulationConfig,
   SimulationMetrics,
   SimulationState,
+  TimeScale,
 } from './types';
 
 const BASE_SEA_LEVEL = 0;
@@ -69,6 +72,11 @@ function generatePangaeaElevation(x: number, y: number): number {
   );
 }
 
+/** Broad shallow continental shelves ideal for Cambrian marine diversification. */
+function generateCambrianElevation(x: number, y: number): number {
+  return clampElevationMeters(generateEarthElevation(x, y) * 0.72 - 400);
+}
+
 /** Higher-frequency noise produces a fragmented island pattern. */
 const generateArchipelagoElevation = (x: number, y: number): number =>
   clampElevationMeters(
@@ -79,12 +87,228 @@ const generateArchipelagoElevation = (x: number, y: number): number =>
 const generateDaisyworldElevation = (x: number, y: number): number =>
   clampElevationMeters(noise2D(x / 20, y / 20) * 400 + 200);
 
-/** Resolves each preset to its per-cell terrain function. */
-const ELEVATION_GENERATORS: Record<PlanetType, ElevationGenerator> = {
-  earth: generateEarthElevation,
-  pangaea: generatePangaeaElevation,
-  archipelago: generateArchipelagoElevation,
-  daisyworld: generateDaisyworldElevation,
+interface PresetLifeSeed {
+  readonly classId: number;
+  readonly species: number;
+  readonly count: number;
+  readonly zones: 'deep' | 'shelf' | 'marine' | 'land';
+}
+
+interface PlanetPresetSpec {
+  readonly elevation: ElevationGenerator;
+  readonly timeScale: TimeScale;
+  readonly solarLuminosity: number;
+  readonly co2Ppm: number;
+  readonly o2Pct: number;
+  readonly seaLevelOffset: number;
+  readonly seeds: readonly PresetLifeSeed[];
+}
+
+/** Era-calibrated planetary presets pairing terrain, atmosphere, time scale, and life. */
+const PLANET_PRESETS: Record<PlanetType, PlanetPresetSpec> = {
+  archean: {
+    elevation: generateEarthElevation,
+    timeScale: 'geologic',
+    solarLuminosity: 0.92,
+    co2Ppm: 900,
+    o2Pct: 0,
+    seaLevelOffset: 0,
+    seeds: [
+      {
+        classId: LIFE_CLASSES.PROKARYOTE.id,
+        species: 1,
+        count: 3,
+        zones: 'deep',
+      },
+    ],
+  },
+  cambrian: {
+    elevation: generateCambrianElevation,
+    timeScale: 'evolution',
+    solarLuminosity: 1.0,
+    co2Ppm: 550,
+    o2Pct: 9,
+    seaLevelOffset: 15,
+    seeds: [
+      {
+        classId: LIFE_CLASSES.EUKARYOTE.id,
+        species: 13,
+        count: 4,
+        zones: 'marine',
+      },
+      {
+        classId: LIFE_CLASSES.RADIATE.id,
+        species: 4,
+        count: 3,
+        zones: 'shelf',
+      },
+      {
+        classId: LIFE_CLASSES.ARTHROPOD.id,
+        species: 5,
+        count: 3,
+        zones: 'shelf',
+      },
+      {
+        classId: LIFE_CLASSES.MOLLUSK.id,
+        species: 6,
+        count: 3,
+        zones: 'shelf',
+      },
+      {
+        classId: LIFE_CLASSES.FISH.id,
+        species: 2,
+        count: 2,
+        zones: 'shelf',
+      },
+    ],
+  },
+  earth: {
+    elevation: generateEarthElevation,
+    timeScale: 'evolution',
+    solarLuminosity: 1.0,
+    co2Ppm: 350,
+    o2Pct: 21,
+    seaLevelOffset: 0,
+    seeds: [
+      {
+        classId: LIFE_CLASSES.EUKARYOTE.id,
+        species: 10,
+        count: 3,
+        zones: 'marine',
+      },
+      {
+        classId: LIFE_CLASSES.ARTHROPOD.id,
+        species: 6,
+        count: 2,
+        zones: 'shelf',
+      },
+      {
+        classId: LIFE_CLASSES.MOLLUSK.id,
+        species: 8,
+        count: 2,
+        zones: 'shelf',
+      },
+      {
+        classId: LIFE_CLASSES.FISH.id,
+        species: 6,
+        count: 3,
+        zones: 'marine',
+      },
+      {
+        classId: LIFE_CLASSES.INSECT.id,
+        species: 4,
+        count: 3,
+        zones: 'land',
+      },
+      {
+        classId: LIFE_CLASSES.AMPHIBIAN.id,
+        species: 4,
+        count: 2,
+        zones: 'land',
+      },
+      {
+        classId: LIFE_CLASSES.REPTILE.id,
+        species: 6,
+        count: 2,
+        zones: 'land',
+      },
+      {
+        classId: LIFE_CLASSES.AVIAN.id,
+        species: 4,
+        count: 2,
+        zones: 'land',
+      },
+      {
+        classId: LIFE_CLASSES.MAMMAL.id,
+        species: 4,
+        count: 3,
+        zones: 'land',
+      },
+    ],
+  },
+  pangaea: {
+    elevation: generatePangaeaElevation,
+    timeScale: 'evolution',
+    solarLuminosity: 1.0,
+    co2Ppm: 700,
+    o2Pct: 18,
+    seaLevelOffset: 0,
+    seeds: [
+      {
+        classId: LIFE_CLASSES.EUKARYOTE.id,
+        species: 10,
+        count: 3,
+        zones: 'marine',
+      },
+      {
+        classId: LIFE_CLASSES.MOLLUSK.id,
+        species: 8,
+        count: 2,
+        zones: 'shelf',
+      },
+      {
+        classId: LIFE_CLASSES.FISH.id,
+        species: 6,
+        count: 3,
+        zones: 'marine',
+      },
+      {
+        classId: LIFE_CLASSES.INSECT.id,
+        species: 3,
+        count: 3,
+        zones: 'land',
+      },
+      {
+        classId: LIFE_CLASSES.AMPHIBIAN.id,
+        species: 4,
+        count: 2,
+        zones: 'land',
+      },
+      {
+        classId: LIFE_CLASSES.REPTILE.id,
+        species: 6,
+        count: 3,
+        zones: 'land',
+      },
+      {
+        classId: LIFE_CLASSES.DINOSAUR.id,
+        species: 3,
+        count: 3,
+        zones: 'land',
+      },
+    ],
+  },
+  archipelago: {
+    elevation: generateArchipelagoElevation,
+    timeScale: 'geologic',
+    solarLuminosity: 1.0,
+    co2Ppm: 500,
+    o2Pct: 1,
+    seaLevelOffset: 0,
+    seeds: [
+      {
+        classId: LIFE_CLASSES.PROKARYOTE.id,
+        species: 6,
+        count: 3,
+        zones: 'deep',
+      },
+      {
+        classId: LIFE_CLASSES.EUKARYOTE.id,
+        species: 1,
+        count: 2,
+        zones: 'shelf',
+      },
+    ],
+  },
+  daisyworld: {
+    elevation: generateDaisyworldElevation,
+    timeScale: 'daisyworld',
+    solarLuminosity: 1.0,
+    co2Ppm: 350,
+    o2Pct: 21,
+    seaLevelOffset: 0,
+    seeds: [],
+  },
 };
 
 /** Wrap longitude, clamp latitude to the poles, then flatten as row-major storage. */
@@ -95,9 +319,8 @@ export function getIdx(x: number, y: number): number {
 }
 
 /**
- * Replace elevation and daisy coverage, reset the year, and reclassify biomes.
+ * Replace elevation, era atmosphere, time scale, and seeded life/daisies; reset year and reclassify biomes.
  * Temperature and moisture are retained until the next simulation tick.
- * The optional random source controls only Daisyworld's initial daisy placement.
  */
 export function generatePlanet(
   state: SimulationState,
@@ -105,9 +328,15 @@ export function generatePlanet(
   type: PlanetType = 'earth',
   random: () => number = Math.random,
 ): SimulationMetrics {
+  const preset = PLANET_PRESETS[type];
   config.year = 0;
+  config.timeScale = preset.timeScale;
+  config.solarLuminosity = preset.solarLuminosity;
+  config.co2Ppm = preset.co2Ppm;
+  config.o2Pct = preset.o2Pct;
+  config.seaLevelOffset = preset.seaLevelOffset;
   const seaBase = BASE_SEA_LEVEL + config.seaLevelOffset;
-  const generateElevation = ELEVATION_GENERATORS[type];
+  const generateElevation = preset.elevation;
 
   for (let y = 0; y < GRID_HEIGHT; y++) {
     for (let x = 0; x < GRID_WIDTH; x++) {
@@ -134,34 +363,54 @@ export function generatePlanet(
 
   recalculateClimate(state, config);
 
-  // Seed primordial prokaryote pockets in equatorial ocean/deep-sea cells (manual p. 133).
-  if (type !== 'daisyworld') {
+  // Seed era-appropriate life pockets across equatorial and mid-latitude bands.
+  if (preset.seeds.length > 0) {
     const deepCandidates: number[] = [];
-    const fallbackCandidates: number[] = [];
-    for (let y = 20; y <= 44; y++) {
+    const shelfCandidates: number[] = [];
+    const marineCandidates: number[] = [];
+    const landCandidates: number[] = [];
+    for (let y = 18; y <= 46; y++) {
       for (let x = 0; x < GRID_WIDTH; x++) {
         const idx = getIdx(x, y);
-        const zone = resolveHabitatZone(
-          state.biome[idx],
-          state.elevation[idx],
-          seaBase,
-        );
-        if (zone === 'ocean' || zone === 'deep_sea') {
-          deepCandidates.push(idx);
-        } else if (zone === 'shelf') {
-          fallbackCandidates.push(idx);
+        const elev = state.elevation[idx];
+        if (elev <= seaBase) {
+          const depth = seaBase - elev;
+          marineCandidates.push(idx);
+          if (depth <= 1_000) {
+            shelfCandidates.push(idx);
+          } else {
+            deepCandidates.push(idx);
+          }
+        } else if (elev - seaBase < 2_500) {
+          landCandidates.push(idx);
         }
       }
     }
-    const candidates =
-      deepCandidates.length > 0 ? deepCandidates : fallbackCandidates;
-    const seedCount = Math.min(3, candidates.length);
-    for (let s = 0; s < seedCount; s++) {
-      const pick = Math.floor(random() * candidates.length);
-      const idx = candidates[pick];
-      state.lifeClass[idx] = LIFE_CLASSES.PROKARYOTE.id;
-      state.lifeSpecies[idx] = 1;
-      state.lifePopulation[idx] = 0.5;
+
+    for (const seed of preset.seeds) {
+      const pool =
+        seed.zones === 'deep'
+          ? deepCandidates.length > 0
+            ? deepCandidates
+            : marineCandidates
+          : seed.zones === 'shelf'
+            ? shelfCandidates.length > 0
+              ? shelfCandidates
+              : marineCandidates
+            : seed.zones === 'marine'
+              ? marineCandidates
+              : landCandidates;
+      const available = pool.filter(
+        idx => state.lifeClass[idx] === LIFE_CLASS_NONE,
+      );
+      const seedCount = Math.min(seed.count, available.length);
+      for (let s = 0; s < seedCount; s++) {
+        const pick = Math.floor(random() * available.length);
+        const idx = available.splice(pick, 1)[0];
+        state.lifeClass[idx] = seed.classId;
+        state.lifeSpecies[idx] = seed.species;
+        state.lifePopulation[idx] = 0.6;
+      }
     }
   }
 
@@ -169,7 +418,53 @@ export function generatePlanet(
 }
 
 /**
- * Advance one 10-year tick in temperature, moisture, daisy, biome, then life order.
+ * Automatically transition the simulation time scale as life advances across eras:
+ * `geologic` -> `evolution` once land fauna or oxygenated marine animals emerge,
+ * `evolution` -> `civilized` once any class reaches Sentience (`Sp.16`).
+ */
+export function updateTimeScale(
+  state: SimulationState,
+  config: SimulationConfig,
+): void {
+  if (config.timeScale === 'daisyworld' || config.timeScale === 'technology') {
+    return;
+  }
+
+  let hasLandFauna = false;
+  let hasOxygenatedMarineFauna = false;
+  let hasSentience = false;
+
+  for (let i = 0; i < CELL_COUNT; i++) {
+    const cls = state.lifeClass[i];
+    if (cls === LIFE_CLASS_NONE || state.lifePopulation[i] < 0.05) continue;
+    if (state.lifeSpecies[i] >= MAX_SPECIES_LEVEL) {
+      hasSentience = true;
+    }
+    const def = LIFE_CLASSES_BY_ID.get(cls);
+    if (!def) continue;
+    if (def.domain === 'land') {
+      hasLandFauna = true;
+    } else if (
+      config.o2Pct >= 8 &&
+      (cls === LIFE_CLASSES.ARTHROPOD.id || cls === LIFE_CLASSES.FISH.id)
+    ) {
+      hasOxygenatedMarineFauna = true;
+    }
+  }
+
+  if (
+    config.timeScale === 'geologic' &&
+    (hasLandFauna || hasOxygenatedMarineFauna)
+  ) {
+    config.timeScale = 'evolution';
+  }
+  if (config.timeScale === 'evolution' && hasSentience) {
+    config.timeScale = 'civilized';
+  }
+}
+
+/**
+ * Advance one simulation tick in temperature, moisture, daisy, biome, then life order.
  * Mutates only model data and returns metrics for the UI to render.
  */
 export function simulationStep(
@@ -180,7 +475,7 @@ export function simulationStep(
   blackDaisyHistory: number[] = [],
   random: () => number = Math.random,
 ): SimulationMetrics {
-  config.year += 10;
+  config.year += TIME_SCALES[config.timeScale].yearsPerTick;
 
   const seaLevel = BASE_SEA_LEVEL + config.seaLevelOffset;
   // The prototype applies a linear 1.2°C change per 100 ppm relative to 350 ppm.
@@ -192,6 +487,7 @@ export function simulationStep(
 
   classifyBiomes(state, config);
   updateLife(state, config, random);
+  updateTimeScale(state, config);
   return calculateMetrics(
     state,
     config,
@@ -405,6 +701,7 @@ function classifyBiome(
   seaLevel: number,
   latitudeDegrees: number,
   axialTiltDegrees: number,
+  o2Pct: number,
 ): BiomeId {
   const altitude = elevation - seaLevel;
 
@@ -420,10 +717,16 @@ function classifyBiome(
     return BIOMES.ALPINE.id;
   }
 
+  if (temperature > 10 && rainfall < 25) return BIOMES.DESERT.id;
+
+  // Vegetated land plant biomes require sufficient atmospheric O₂ to colonize bare rock.
+  if (o2Pct < PLANT_BIOME_MIN_O2_PCT) {
+    return BIOMES.ALPINE.id;
+  }
+
   if (altitude <= 2 && temperature > 10 && rainfall > 120) {
     return BIOMES.SWAMP.id;
   }
-  if (temperature > 10 && rainfall < 25) return BIOMES.DESERT.id;
   if (temperature > 22 && rainfall > 150) return BIOMES.JUNGLE.id;
   if (
     temperature >= 5 &&
@@ -471,6 +774,7 @@ export function classifyBiomes(
       seaLevel,
       latitude,
       config.axialTiltDegrees,
+      config.o2Pct,
     );
   }
 }
@@ -497,34 +801,50 @@ export function getLifeHabitatSuitability(
   return SUITABILITY_MULTIPLIERS[def.habitatPreferences[zone]];
 }
 
-const BASE_PLANETARY_ADVANCEMENT_RATE = 0.08;
-const BASE_PLANETARY_SENTIENCE_RATE = 0.004;
+const BASE_PLANETARY_ADVANCEMENT_RATE = 0.14;
+const BASE_PLANETARY_SENTIENCE_RATE = 0.006;
 
 /**
- * Compute the per-cell probability that a cell of `(def, species)` advances to
- * `species + 1` on a tick. Dividing by `classCellCount` keeps the planetary
- * expected advancement rate bounded while still rewarding larger populations.
+ * Compute the per-cell probability that a leading-edge cell of `(def, species)`
+ * advances to `species + 1` on a tick. Dividing by `speciesCellCount` keeps the
+ * expected planetary advancement rate bounded without starving rare frontier cells,
+ * while scaling by `popFactor` (class size) and the active `timeScale`.
  */
 export function computeSpeciesAdvancementProb(
   def: LifeClassDefinition,
   species: number,
   classCellCount: number,
+  speciesCellCount: number = classCellCount,
+  timeScale: TimeScale = 'evolution',
 ): number {
-  if (species >= MAX_SPECIES_LEVEL || classCellCount <= 0) return 0;
+  if (
+    species >= MAX_SPECIES_LEVEL ||
+    classCellCount <= 0 ||
+    speciesCellCount <= 0
+  ) {
+    return 0;
+  }
   const popFactor = Math.min(1, Math.sqrt(classCellCount / 160));
+  const timeMultiplier = TIME_SCALES[timeScale].advancementMultiplier;
   if (species === MAX_SPECIES_LEVEL - 1) {
-    return (
-      (BASE_PLANETARY_SENTIENCE_RATE * popFactor * def.sentienceRate) /
-      classCellCount
+    return Math.min(
+      1,
+      (BASE_PLANETARY_SENTIENCE_RATE *
+        popFactor *
+        def.sentienceRate *
+        timeMultiplier) /
+        speciesCellCount,
     );
   }
   const speciesFactor = species <= 8 ? 1.0 : species <= 12 ? 0.65 : 0.35;
-  return (
+  return Math.min(
+    1,
     (BASE_PLANETARY_ADVANCEMENT_RATE *
       popFactor *
       def.advancementRate *
-      speciesFactor) /
-    classCellCount
+      speciesFactor *
+      timeMultiplier) /
+      speciesCellCount,
   );
 }
 
@@ -567,6 +887,7 @@ interface NeighborhoodTrophicSummary {
   cetaceanPreyPop: number;
   insectPop: number;
   earlyInsectCells: number;
+  carnifernCells: number;
 }
 
 function sampleNeighborhoodTrophic(
@@ -581,6 +902,7 @@ function sampleNeighborhoodTrophic(
   let cetaceanPreyPop = 0;
   let insectPop = 0;
   let earlyInsectCells = 0;
+  let carnifernCells = 0;
 
   for (let dy = -2; dy <= 2; dy++) {
     const ny = cy + dy;
@@ -615,6 +937,8 @@ function sampleNeighborhoodTrophic(
         if (sp >= 1 && sp <= 4) {
           earlyInsectCells++;
         }
+      } else if (cls === LIFE_CLASSES.CARNIFERN.id) {
+        carnifernCells++;
       }
     }
   }
@@ -625,6 +949,7 @@ function sampleNeighborhoodTrophic(
     cetaceanPreyPop,
     insectPop,
     earlyInsectCells,
+    carnifernCells,
   };
 }
 
@@ -643,9 +968,11 @@ export function updateLife(
   const prevSpecies = new Uint8Array(state.lifeSpecies);
   const prevPop = new Float32Array(state.lifePopulation);
 
-  // Precompute habitat zones and global class cell counts once per tick.
+  // Precompute habitat zones and global class/species counts once per tick.
   const zones: HabitatZone[] = new Array<HabitatZone>(CELL_COUNT);
   const classCellCounts = new Int32Array(16);
+  const speciesCounts = new Int32Array(16 * 17);
+  const classMaxSpecies = new Uint8Array(16);
   let plantBiomeCount = 0;
 
   for (let i = 0; i < CELL_COUNT; i++) {
@@ -666,7 +993,12 @@ export function updateLife(
     }
     const cls = prevClass[i];
     if (cls !== LIFE_CLASS_NONE && prevPop[i] >= 0.05) {
+      const sp = Math.max(1, prevSpecies[i]);
       classCellCounts[cls]++;
+      speciesCounts[cls * 17 + sp]++;
+      if (sp > classMaxSpecies[cls]) {
+        classMaxSpecies[cls] = sp;
+      }
     }
   }
 
@@ -698,10 +1030,15 @@ export function updateLife(
       const cls = prevClass[i];
 
       if (cls === LIFE_CLASS_NONE) {
-        // Carnifern co-evolution from vegetated land plants in the presence of Insects 1–4.
+        // Carnifern co-evolution from vegetated land plants in the presence of dense early Insects (1–4).
         if (
           isVegetatedLandZone(zone) &&
-          classCellCounts[LIFE_CLASSES.INSECT.id] >= 2 &&
+          classCellCounts[LIFE_CLASSES.INSECT.id] >= 3 &&
+          classCellCounts[LIFE_CLASSES.CARNIFERN.id] <
+            Math.max(
+              1,
+              Math.floor(classCellCounts[LIFE_CLASSES.INSECT.id] * 0.15),
+            ) &&
           getLifeHabitatSuitability(
             LIFE_CLASSES.CARNIFERN,
             zone,
@@ -716,7 +1053,11 @@ export function updateLife(
             x,
             y,
           );
-          if (trophic.earlyInsectCells >= 2 && random() < 0.012) {
+          if (
+            trophic.earlyInsectCells >= 3 &&
+            trophic.carnifernCells === 0 &&
+            random() < 0.002
+          ) {
             state.lifeClass[i] = LIFE_CLASSES.CARNIFERN.id;
             state.lifeSpecies[i] = 1;
             state.lifePopulation[i] = 0.3;
@@ -802,7 +1143,7 @@ export function updateLife(
             effectiveCapacity = baseSuit * food;
           }
         } else if (def.trophicTier === 5) {
-          // Carniferns strictly depend on nearby Insect prey (manual pp. 139, 141).
+          // Carniferns strictly depend on nearby Insect prey and self-space sparsely (manual pp. 139, 141).
           const trophic = sampleNeighborhoodTrophic(
             prevClass,
             prevSpecies,
@@ -810,8 +1151,13 @@ export function updateLife(
             x,
             y,
           );
-          const food = Math.min(1, trophic.insectPop * 0.6);
-          effectiveCapacity = Math.min(1, baseSuit + 0.55) * food;
+          const food = Math.min(1, trophic.insectPop * 0.35);
+          const crowdPenalty =
+            trophic.carnifernCells > 1
+              ? 1 / (trophic.carnifernCells * trophic.carnifernCells)
+              : 1;
+          effectiveCapacity =
+            Math.min(0.45, baseSuit + 0.15) * food * crowdPenalty;
         }
       }
 
@@ -831,13 +1177,19 @@ export function updateLife(
         nextPop = Math.min(1, Math.max(0.05, nextPop));
         state.lifePopulation[i] = nextPop;
 
-        // Within-class species Advancement (1..16), planetary-rate normalized (manual pp. 133, 135).
+        // Within-class species Advancement (1..16) on leading-edge frontier cells (manual pp. 133, 135).
         let nextSpecies = species;
-        if (nextPop >= 0.35 && species < MAX_SPECIES_LEVEL) {
+        if (
+          nextPop >= 0.35 &&
+          species < MAX_SPECIES_LEVEL &&
+          species === classMaxSpecies[cls]
+        ) {
           const advanceProb = computeSpeciesAdvancementProb(
             def,
             species,
             classCellCounts[cls],
+            speciesCounts[cls * 17 + species],
+            config.timeScale,
           );
           if (advanceProb > 0 && random() < advanceProb) {
             nextSpecies = species + 1;
@@ -927,6 +1279,18 @@ export function updateLife(
             state.lifeSpecies[nIdx] = species;
             state.lifePopulation[nIdx] = 0.2;
           }
+        } else if (
+          nClass === def.id &&
+          species > state.lifeSpecies[nIdx] &&
+          suit >= 0.25 &&
+          random() < 0.15
+        ) {
+          // Higher species within the same class gradually spread across lower-species neighbors.
+          state.lifeSpecies[nIdx] = species;
+          state.lifePopulation[nIdx] = Math.max(
+            state.lifePopulation[nIdx],
+            0.25,
+          );
         } else if (nClass !== def.id && suit >= 0.6) {
           const nDef = LIFE_CLASSES_BY_ID.get(nClass);
           if (
@@ -948,10 +1312,17 @@ export function updateLife(
   const eukaryoteFrac = eukaryotePopSum / CELL_COUNT;
   const plantFrac = plantBiomeCount / CELL_COUNT;
   const animalFrac = animalPopSum / CELL_COUNT;
+  const o2TimeScale = Math.max(
+    0.25,
+    Math.min(2.0, TIME_SCALES[config.timeScale].advancementMultiplier),
+  );
   const o2Production =
-    (eukaryoteFrac * 1.4 + plantFrac * 0.25) * config.solarLuminosity;
-  const o2Consumption = animalFrac * 0.15;
-  const oxidationSink = config.o2Pct > 21 ? (config.o2Pct - 21) * 0.02 : 0;
+    (eukaryoteFrac * 1.4 + plantFrac * 0.45) *
+    config.solarLuminosity *
+    o2TimeScale;
+  const o2Consumption = animalFrac * 0.15 * o2TimeScale;
+  const oxidationSink =
+    config.o2Pct > 21 ? (config.o2Pct - 21) * 0.045 * o2TimeScale : 0;
   config.o2Pct = Math.max(
     0,
     Math.min(40, config.o2Pct + o2Production - o2Consumption - oxidationSink),

@@ -209,6 +209,8 @@ void test('volcano brush wraps at the longitude edge and tapers by radius', () =
 
 void test('planet presets generate finite terrain and reset the year', () => {
   const planetTypes: PlanetType[] = [
+    'archean',
+    'cambrian',
     'earth',
     'pangaea',
     'archipelago',
@@ -598,17 +600,59 @@ void test('lifeforms follow Page 141 habitat matrix, species-slot mutations, Euk
   strictEqual(state.lifePopulation[centerIdx], 0);
 });
 
-void test('computeSpeciesAdvancementProb normalizes by cell count and gates sentience by class', () => {
+void test('computeSpeciesAdvancementProb normalizes by frontier count, scales by timeScale, and gates sentience by class', () => {
   // Expected planetary advances stay bounded as N grows (does not explode with N)
   const expectedAt200 =
-    200 * computeSpeciesAdvancementProb(LIFE_CLASSES.MAMMAL, 4, 200);
+    200 * computeSpeciesAdvancementProb(LIFE_CLASSES.MAMMAL, 4, 200, 200);
   const expectedAt2000 =
-    2000 * computeSpeciesAdvancementProb(LIFE_CLASSES.MAMMAL, 4, 2000);
+    2000 * computeSpeciesAdvancementProb(LIFE_CLASSES.MAMMAL, 4, 2000, 2000);
   strictEqual(Math.abs(expectedAt200 - expectedAt2000) < 1e-9, true);
+
+  // A lone leading-edge frontier cell is not starved by a large lower-species population
+  const frontierSingle = computeSpeciesAdvancementProb(
+    LIFE_CLASSES.PROKARYOTE,
+    2,
+    1_000,
+    1,
+    'geologic',
+  );
+  const frontierSpread = computeSpeciesAdvancementProb(
+    LIFE_CLASSES.PROKARYOTE,
+    2,
+    1_000,
+    100,
+    'geologic',
+  );
+  strictEqual(frontierSingle > frontierSpread * 50, true);
+
+  // Geologic era advances faster per tick than Evolution, which is faster than Civilized
+  const geoProb = computeSpeciesAdvancementProb(
+    LIFE_CLASSES.PROKARYOTE,
+    2,
+    500,
+    10,
+    'geologic',
+  );
+  const evoProb = computeSpeciesAdvancementProb(
+    LIFE_CLASSES.PROKARYOTE,
+    2,
+    500,
+    10,
+    'evolution',
+  );
+  const civProb = computeSpeciesAdvancementProb(
+    LIFE_CLASSES.PROKARYOTE,
+    2,
+    500,
+    10,
+    'civilized',
+  );
+  strictEqual(geoProb > evoProb, true);
+  strictEqual(evoProb > civProb, true);
 
   // Larger population still advances faster than tiny pockets (manual p. 133)
   const expectedAt10 =
-    10 * computeSpeciesAdvancementProb(LIFE_CLASSES.MAMMAL, 4, 10);
+    10 * computeSpeciesAdvancementProb(LIFE_CLASSES.MAMMAL, 4, 10, 10);
   strictEqual(expectedAt200 > expectedAt10, true);
 
   // Lower classes cannot reach Sentience (Sp.16) naturally without external help
@@ -635,7 +679,82 @@ void test('computeSpeciesAdvancementProb normalizes by cell count and gates sent
   );
   strictEqual(mammalSentience > carnifernSentience, true);
   strictEqual(carnifernSentience > 0, true);
-  strictEqual(500 * mammalSentience <= 0.005, true);
+  strictEqual(500 * mammalSentience <= 0.0065, true);
+});
+
+void test('O2 gates vegetated land biomes, same-class higher species displace lower, and time scales auto-transition', () => {
+  // Low O2 (< 4%) keeps temperate wet land as barren rock while preserving desert and sea ice
+  const state = createSimulationState();
+  const config = createSimulationConfig();
+  config.o2Pct = 0;
+  const wetCell = getIdx(10, 32);
+  const dryCell = getIdx(11, 32);
+  state.elevation[wetCell] = 100;
+  state.temperature[wetCell] = 20;
+  state.moisture[wetCell] = 100;
+  state.elevation[dryCell] = 100;
+  state.temperature[dryCell] = 25;
+  state.moisture[dryCell] = 10;
+
+  classifyBiomes(state, config);
+  strictEqual(state.biome[wetCell], BIOMES.ALPINE.id);
+  strictEqual(state.biome[dryCell], BIOMES.DESERT.id);
+
+  // Crossing 4% O2 greens the temperate land into forest
+  config.o2Pct = 4;
+  classifyBiomes(state, config);
+  strictEqual(state.biome[wetCell], BIOMES.FOREST.id);
+
+  // Same-class higher species displaces lower-species neighbors in Pass 2
+  const seaState = createSimulationState();
+  const seaConfig = createSimulationConfig();
+  seaConfig.timeScale = 'geologic';
+  seaConfig.o2Pct = 0;
+  seaState.elevation.fill(-500);
+  seaState.temperature.fill(20);
+  seaState.biome.fill(BIOMES.OCEAN.id);
+  const left = getIdx(20, 32);
+  const right = getIdx(21, 32);
+  seaState.lifeClass[left] = LIFE_CLASSES.PROKARYOTE.id;
+  seaState.lifeSpecies[left] = 3;
+  seaState.lifePopulation[left] = 0.8;
+  seaState.lifeClass[right] = LIFE_CLASSES.PROKARYOTE.id;
+  seaState.lifeSpecies[right] = 1;
+  seaState.lifePopulation[right] = 0.8;
+
+  updateLife(seaState, seaConfig, () => 0.05);
+  strictEqual(seaState.lifeSpecies[right], 3);
+
+  // Archean preset starts in Geologic era (+1,000,000 yr/tick) with 0% O2 and auto-transitions to Evolution -> Civilized
+  const eraState = createSimulationState();
+  const eraConfig = createSimulationConfig();
+  generatePlanet(eraState, eraConfig, 'archean', () => 0.5);
+  strictEqual(eraConfig.timeScale, 'geologic');
+  strictEqual(eraConfig.o2Pct, 0);
+  simulationStep(eraState, eraConfig, [], [], [], () => 0.99);
+  strictEqual(eraConfig.year, 1_000_000);
+
+  // Adding a land species shifts Geologic -> Evolution (+100,000 yr/tick)
+  const landCell = Array.from(eraState.elevation).findIndex(e => e > 100);
+  eraConfig.o2Pct = 15;
+  eraState.lifeClass[landCell] = LIFE_CLASSES.INSECT.id;
+  eraState.lifeSpecies[landCell] = 1;
+  eraState.lifePopulation[landCell] = 0.8;
+  simulationStep(eraState, eraConfig, [], [], [], () => 0.99);
+  strictEqual(eraConfig.timeScale, 'evolution');
+  const yearAtEvolution = eraConfig.year;
+  simulationStep(eraState, eraConfig, [], [], [], () => 0.99);
+  strictEqual(eraConfig.year - yearAtEvolution, 100_000);
+
+  // Reaching Species 16 shifts Evolution -> Civilized (+100 yr/tick)
+  eraState.lifeClass[landCell] = LIFE_CLASSES.MAMMAL.id;
+  eraState.lifeSpecies[landCell] = 16;
+  eraState.lifePopulation[landCell] = 0.8;
+  simulationStep(eraState, eraConfig, [], [], [], () => 0.99);
+  strictEqual(eraConfig.timeScale, 'civilized');
+  const yearAtCivilized = eraConfig.year;
+  simulationStep(eraState, eraConfig, [], [], [], () => 0.99);
+  strictEqual(eraConfig.year - yearAtCivilized, 100);
 });
 
 void test('Carniferns co-evolve from plants with abundant early Insects and starve without Insects', () => {

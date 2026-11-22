@@ -1,5 +1,10 @@
-/** Terrain presets accepted by `generatePlanet`; each uses a distinct elevation field. */
-export type PlanetType = 'earth' | 'pangaea' | 'archipelago' | 'daisyworld';
+/** Terrain & era presets accepted by `generatePlanet`. */
+export type PlanetType =
+  'archean' | 'cambrian' | 'earth' | 'pangaea' | 'archipelago' | 'daisyworld';
+
+/** Simulation time scales (manual p. 100) plus the 10-year Daisyworld scale. */
+export type TimeScale =
+  'geologic' | 'evolution' | 'civilized' | 'technology' | 'daisyworld';
 
 /** Brush operations accepted by the model; `inspect` intentionally changes nothing. */
 export type GodTool =
@@ -43,8 +48,10 @@ export interface SimulationState {
 }
 
 export interface SimulationConfig {
-  /** Elapsed simulation years; each call to `simulationStep` adds 10. */
+  /** Elapsed simulation years; each tick adds `TIME_SCALES[timeScale].yearsPerTick`. */
   year: number;
+  /** Current simulation time scale (`geologic`, `evolution`, `civilized`, `technology`, or `daisyworld`). */
+  timeScale: TimeScale;
   /** Stellar luminosity relative to the default value of 1. */
   solarLuminosity: number;
   /** Atmospheric carbon dioxide concentration in parts per million. */

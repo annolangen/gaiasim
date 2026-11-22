@@ -1,9 +1,53 @@
-import type {SimulationConfig, SimulationState} from './types';
+import type {SimulationConfig, SimulationState, TimeScale} from './types';
 
 export const GRID_WIDTH = 128;
 export const GRID_HEIGHT = 64;
 /** Number of entries required by each per-cell state buffer. */
 export const CELL_COUNT = GRID_WIDTH * GRID_HEIGHT;
+
+export interface TimeScaleDefinition {
+  readonly id: TimeScale;
+  readonly label: string;
+  readonly yearsPerTick: number;
+  readonly advancementMultiplier: number;
+}
+
+/** Simulation time scales following manual p. 100 and plan.md section 3.C.4. */
+export const TIME_SCALES: Readonly<Record<TimeScale, TimeScaleDefinition>> = {
+  geologic: {
+    id: 'geologic',
+    label: 'Geologic',
+    yearsPerTick: 1_000_000,
+    advancementMultiplier: 2.0,
+  },
+  evolution: {
+    id: 'evolution',
+    label: 'Evolution',
+    yearsPerTick: 100_000,
+    advancementMultiplier: 1.0,
+  },
+  civilized: {
+    id: 'civilized',
+    label: 'Civilized',
+    yearsPerTick: 100,
+    advancementMultiplier: 0.15,
+  },
+  technology: {
+    id: 'technology',
+    label: 'Technology',
+    yearsPerTick: 1,
+    advancementMultiplier: 0.02,
+  },
+  daisyworld: {
+    id: 'daisyworld',
+    label: 'Daisyworld',
+    yearsPerTick: 10,
+    advancementMultiplier: 1.0,
+  },
+};
+
+/** Minimum atmospheric O₂ (%) required for vegetated land plant biomes to colonize rock. */
+export const PLANT_BIOME_MIN_O2_PCT = 4;
 
 interface BiomeDefinition {
   /** Stored in the state's `Uint8Array`; IDs must fit in one byte. */
@@ -233,7 +277,7 @@ export const LIFE_CLASSES = {
       {toClassId: 4, minSpecies: 1, maxSpecies: 8},
       {toClassId: 8, minSpecies: 9, maxSpecies: 12},
     ],
-    advancementRate: 1.0,
+    advancementRate: 0.9,
     sentienceRate: 0,
     minO2Pct: 2,
     minTempC: 2,
@@ -265,8 +309,8 @@ export const LIFE_CLASSES = {
       {toClassId: 5, minSpecies: 1, maxSpecies: 4},
       {toClassId: 9, minSpecies: 5, maxSpecies: 12},
     ],
-    advancementRate: 1.0,
-    sentienceRate: 0.1,
+    advancementRate: 0.7,
+    sentienceRate: 0.015,
     minO2Pct: 4,
     minTempC: 2,
     maxTempC: 45,
@@ -294,8 +338,8 @@ export const LIFE_CLASSES = {
     competitionRank: 5,
     evolvesFrom: [{fromClassId: 4, minSpecies: 1, maxSpecies: 4}],
     mutations: [{toClassId: 6, minSpecies: 5, maxSpecies: 12}],
-    advancementRate: 1.0,
-    sentienceRate: 0.15,
+    advancementRate: 0.75,
+    sentienceRate: 0.04,
     minO2Pct: 4,
     minTempC: 0,
     maxTempC: 40,
@@ -355,8 +399,8 @@ export const LIFE_CLASSES = {
     competitionRank: 12,
     evolvesFrom: [{fromClassId: 14, minSpecies: 5, maxSpecies: 12}],
     mutations: [{toClassId: 14, minSpecies: 13, maxSpecies: 16}],
-    advancementRate: 0.9,
-    sentienceRate: 0.7,
+    advancementRate: 0.95,
+    sentienceRate: 0.75,
     minO2Pct: 17,
     minTempC: -2,
     maxTempC: 35,
@@ -387,8 +431,8 @@ export const LIFE_CLASSES = {
       {fromClassId: 6, minSpecies: 9, maxSpecies: 12},
     ],
     mutations: [],
-    advancementRate: 0.85,
-    sentienceRate: 0.15,
+    advancementRate: 0.7,
+    sentienceRate: 0.05,
     minO2Pct: 10,
     minTempC: -5,
     maxTempC: 40,
@@ -416,8 +460,8 @@ export const LIFE_CLASSES = {
     competitionRank: 5,
     evolvesFrom: [{fromClassId: 4, minSpecies: 5, maxSpecies: 12}],
     mutations: [],
-    advancementRate: 0.9,
-    sentienceRate: 0.1,
+    advancementRate: 0.5,
+    sentienceRate: 0.015,
     minO2Pct: 8,
     minTempC: 0,
     maxTempC: 45,
@@ -478,7 +522,7 @@ export const LIFE_CLASSES = {
       {toClassId: 14, minSpecies: 9, maxSpecies: 12},
     ],
     advancementRate: 0.95,
-    sentienceRate: 0.4,
+    sentienceRate: 0.35,
     minO2Pct: 13,
     minTempC: 10,
     maxTempC: 48,
@@ -509,7 +553,7 @@ export const LIFE_CLASSES = {
       {toClassId: 13, minSpecies: 1, maxSpecies: 4},
       {toClassId: 14, minSpecies: 5, maxSpecies: 8},
     ],
-    advancementRate: 0.9,
+    advancementRate: 0.95,
     sentienceRate: 0.6,
     minO2Pct: 15,
     minTempC: 10,
@@ -538,7 +582,7 @@ export const LIFE_CLASSES = {
     competitionRank: 10,
     evolvesFrom: [{fromClassId: 12, minSpecies: 1, maxSpecies: 4}],
     mutations: [],
-    advancementRate: 0.85,
+    advancementRate: 0.9,
     sentienceRate: 0.6,
     minO2Pct: 16,
     minTempC: -15,
@@ -571,7 +615,7 @@ export const LIFE_CLASSES = {
       {fromClassId: 12, minSpecies: 5, maxSpecies: 8},
     ],
     mutations: [{toClassId: 7, minSpecies: 5, maxSpecies: 12}],
-    advancementRate: 0.85,
+    advancementRate: 0.95,
     sentienceRate: 1.0,
     minO2Pct: 16,
     minTempC: -20,
@@ -597,12 +641,12 @@ export const LIFE_CLASSES = {
     domain: 'land',
     sprite: 'carnifern',
     trophicTier: 5,
-    competitionRank: 6,
+    competitionRank: 4,
     evolvesFrom: [],
     mutations: [],
     coEvolvesFrom: {companionClassId: 9, minSpecies: 1, maxSpecies: 4},
-    advancementRate: 0.75,
-    sentienceRate: 0.08,
+    advancementRate: 0.45,
+    sentienceRate: 0.01,
     minO2Pct: 11,
     minTempC: 0,
     maxTempC: 45,
@@ -651,6 +695,7 @@ export function createSimulationState(): SimulationState {
 export function createSimulationConfig(): SimulationConfig {
   return {
     year: 0,
+    timeScale: 'daisyworld',
     solarLuminosity: 1,
     co2Ppm: 350,
     axialTiltDegrees: 23.5,

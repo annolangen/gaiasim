@@ -34,6 +34,8 @@ import {
   LIFE_CLASSES,
   LIFE_CLASSES_BY_ID,
   MAX_SPECIES_LEVEL,
+  PLANT_BIOME_MIN_O2_PCT,
+  TIME_SCALES,
 } from './sim/constants';
 import {
   applyGodTool,
@@ -73,7 +75,7 @@ const uiState = {
   speed: 1,
   activeLayer: 'biomes' as MapLayer,
   activeTool: 'inspect' as GodTool,
-  activePreset: 'earth' as PlanetType,
+  activePreset: 'archean' as PlanetType,
   showIsolines: true,
   zoomToEvent: false,
   visibleLifeClasses: new Set<number>(ALL_LIFE_CLASSES.map(def => def.id)),
@@ -168,6 +170,18 @@ function logEvent(
   }
 }
 
+function formatSimulationYear(year: number): string {
+  if (year >= 1_000_000_000) return `${(year / 1_000_000_000).toFixed(2)} Byr`;
+  if (year >= 1_000_000) return `${(year / 1_000_000).toFixed(1)} Myr`;
+  if (year >= 10_000) return `${Math.round(year / 1_000)} kyr`;
+  return year.toLocaleString();
+}
+
+function formatTickDuration(yearsPerTick: number): string {
+  if (yearsPerTick >= 10_000) return formatSimulationYear(yearsPerTick);
+  return `${yearsPerTick.toLocaleString()} yr`;
+}
+
 const simulation = (() => {
   const state = createSimulationState();
   const config = createSimulationConfig();
@@ -175,12 +189,29 @@ const simulation = (() => {
   const activeLifeClassCoords = new Map<number, {x: number; y: number}>();
   const sentientLifeClasses = new Set<number>();
   let timer: number | undefined;
-  let metrics = generatePlanet(state, config, 'earth');
+  let metrics = generatePlanet(state, config, 'archean');
+  let lastTimeScale = config.timeScale;
+  let continentsGreened = config.o2Pct >= PLANT_BIOME_MIN_O2_PCT;
   for (const [id, coords] of Object.entries(metrics.lifeClassSampleCoords)) {
     activeLifeClassCoords.set(Number(id), coords);
   }
 
   function recordLifeMilestones() {
+    if (!continentsGreened && config.o2Pct >= PLANT_BIOME_MIN_O2_PCT) {
+      continentsGreened = true;
+      logEvent(
+        `GREAT OXIDATION: O₂ reached ${config.o2Pct.toFixed(1)}% — land plants colonizing continents!`,
+        'emerald',
+      );
+    }
+    if (config.timeScale !== lastTimeScale) {
+      lastTimeScale = config.timeScale;
+      const ts = TIME_SCALES[config.timeScale];
+      logEvent(
+        `ERA SHIFT: Entered [${ts.label.toUpperCase()}] Time Scale (${formatTickDuration(ts.yearsPerTick)}/tick).`,
+        'cyan',
+      );
+    }
     const nextCoords = new Map<number, {x: number; y: number}>();
     for (const [id, coords] of Object.entries(metrics.lifeClassSampleCoords)) {
       nextCoords.set(Number(id), coords);
@@ -292,6 +323,8 @@ const simulation = (() => {
       cancelCameraFlight();
       uiState.activePreset = type;
       metrics = generatePlanet(state, config, type);
+      lastTimeScale = config.timeScale;
+      continentsGreened = config.o2Pct >= PLANT_BIOME_MIN_O2_PCT;
       activeLifeClassCoords.clear();
       sentientLifeClasses.clear();
       for (const [id, coords] of Object.entries(
@@ -300,9 +333,18 @@ const simulation = (() => {
         activeLifeClassCoords.set(Number(id), coords);
       }
       syncAudio();
-      logEvent(`Planet generated: Presets [${type.toUpperCase()}].`, 'emerald');
+      const ts = TIME_SCALES[config.timeScale];
+      logEvent(
+        `Planet generated: [${type.toUpperCase()}] (${ts.label} Era, O₂ ${config.o2Pct.toFixed(0)}%).`,
+        'emerald',
+      );
     },
     step,
+    setO2Pct(o2Pct: number) {
+      config.o2Pct = o2Pct;
+      recalculateClimate(state, config);
+      refreshMetrics();
+    },
     setSeaLevelOffset(seaLevelOffset: number) {
       config.seaLevelOffset = seaLevelOffset;
       recalculateClimate(state, config);
@@ -401,11 +443,17 @@ function statusBarHtml() {
       class="hidden md:flex items-center space-x-6 text-xs bg-slate-950/70 px-4 py-2 rounded-lg border border-slate-800"
     >
       <div class="flex items-center space-x-2">
+        <span
+          class="px-1.5 py-0.5 rounded bg-cyan-950/80 border border-cyan-700/60 text-cyan-300 font-mono text-[10px] uppercase tracking-wider"
+          title=${`Time Scale: ${TIME_SCALES[simulation.config.timeScale].label} (${formatTickDuration(TIME_SCALES[simulation.config.timeScale].yearsPerTick)}/tick)`}
+        >
+          ${TIME_SCALES[simulation.config.timeScale].label}
+        </span>
         <span class="text-slate-500">
           <i class="fa-solid fa-clock"></i> Year:
         </span>
         <span class="font-bold text-amber-400 font-mono">
-          ${simulation.config.year}
+          ${formatSimulationYear(simulation.config.year)}
         </span>
       </div>
       <div class="flex items-center space-x-2">
@@ -525,7 +573,7 @@ function atmosphericSlidersHtml() {
   }
 
   function oxygenInput(this: HTMLInputElement) {
-    simulation.config.o2Pct = Number(this.value);
+    simulation.setO2Pct(Number(this.value));
   }
 
   function seaLevelInput(this: HTMLInputElement) {
@@ -643,7 +691,9 @@ const GENERATOR_PRESETS: readonly {
   type: PlanetType;
   label: string;
 }[] = [
-  {id: 'presetEarth', type: 'earth', label: 'Earth-like'},
+  {id: 'presetArchean', type: 'archean', label: 'Early Earth'},
+  {id: 'presetCambrian', type: 'cambrian', label: 'Cambrian'},
+  {id: 'presetEarth', type: 'earth', label: 'Modern Earth'},
   {id: 'presetPangaea', type: 'pangaea', label: 'Pangaea'},
   {id: 'presetArchipelago', type: 'archipelago', label: 'Islands'},
   {id: 'presetDaisyworld', type: 'daisyworld', label: 'Daisyworld'},
